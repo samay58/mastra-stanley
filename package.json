@@ -1,0 +1,42 @@
+{
+  "name": "ipo-agent",
+  "version": "1.0.0",
+  "description": "IPO S-1 Agent using Mastra for intelligent document processing",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "process-s1": "tsx src/processor/process-s1.ts",
+    "embed": "tsx src/embeddings/generate-embeddings.ts",
+    "query": "tsx src/query.ts",
+    "query-structured": "tsx src/query-structured.ts",
+    "test": "jest",
+    "mastra:dev": "mastra dev"
+  },
+  "keywords": [
+    "ipo",
+    "s1",
+    "mastra",
+    "rag",
+    "agent",
+    "financial"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@ai-sdk/openai": "latest",
+    "@mastra/core": "latest",
+    "@mastra/memory": "^0.11.1",
+    "@mastra/pg": "latest",
+    "@mastra/rag": "latest",
+    "ai": "^4.0.0",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
