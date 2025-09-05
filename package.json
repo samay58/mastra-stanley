@@ -11,6 +11,12 @@
     "embed": "tsx src/embeddings/generate-embeddings.ts",
     "query": "tsx src/query.ts",
     "query-structured": "tsx src/query-structured.ts",
+    "generate-report": "tsx src/scripts/generateInvestmentReport.ts",
+    "test-workflow": "tsx src/test-workflow.ts",
+    "init-search": "tsx src/scripts/initializeHybridSearch.ts",
+    "validate-report": "tsx src/scripts/validateReport.ts",
+    "test-financial-agent": "tsx examples/agent_quick_check.ts",
+    "preview-table-tool": "tsx examples/table_tool_preview.ts",
     "test": "jest",
     "mastra:dev": "mastra dev"
   },
@@ -26,7 +32,7 @@
   "license": "MIT",
   "dependencies": {
     "@ai-sdk/openai": "latest",
-    "@mastra/core": "latest",
+    "@mastra/core": "^0.10.10",
     "@mastra/memory": "^0.11.1",
     "@mastra/pg": "latest",
     "@mastra/rag": "latest",
