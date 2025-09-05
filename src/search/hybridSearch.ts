@@ -37,24 +37,55 @@ export class HybridSearcher {
    * Initialize BM25 index with chunks
    */
   async initialize(): Promise<void> {
-    // console.log('Initializing hybrid search...');
+    console.log('🔍 Initializing hybrid search...');
     
     try {
+      // Validate file existence first
+      const chunksPath = await this.getChunksPath();
+      console.log(`📁 Loading chunks from: ${chunksPath}`);
+      
       // Load all chunks for BM25 indexing
       const chunks = await this.loadAllChunks();
+      console.log(`📊 Loaded ${chunks.length} chunks for indexing`);
+      
+      if (chunks.length === 0) {
+        throw new Error('No chunks found - cannot initialize BM25 index. Please run data processing first.');
+      }
+      
+      // Validate chunk format
+      const sampleChunk = chunks[0];
+      if (!sampleChunk.id || !sampleChunk.content) {
+        throw new Error(`Invalid chunk format. Expected {id, content, metadata}, got: ${JSON.stringify(sampleChunk)}`);
+      }
       
       // Build BM25 index
+      console.log('🔨 Building BM25 index...');
       this.bm25Scorer = await createBM25Index(chunks);
+      
+      if (!this.bm25Scorer) {
+        throw new Error('Failed to create BM25 scorer - index building failed');
+      }
       
       // Cache chunks for quick lookup
       chunks.forEach(chunk => {
         this.chunksCache.set(chunk.id, chunk);
       });
       
-      // console.log(`Hybrid search initialized with ${chunks.length} chunks`);
+      console.log(`✅ Hybrid search initialized successfully with ${chunks.length} chunks and ${this.chunksCache.size} cached entries`);
     } catch (error) {
-      console.error('Error initializing hybrid search:', error);
-      throw error;
+      console.error('❌ Error initializing hybrid search:', error);
+      
+      // Provide more specific error information
+      if (error instanceof Error) {
+        console.error(`❌ Error details: ${error.message}`);
+        console.error(`❌ Stack trace: ${error.stack}`);
+      }
+      
+      // Reset state on failure
+      this.bm25Scorer = null;
+      this.chunksCache.clear();
+      
+      throw new Error(`Hybrid search initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
   
@@ -241,24 +272,85 @@ export class HybridSearcher {
   }
   
   /**
-   * Load all chunks from the file system
+   * Get the path to chunks file with validation
    */
-  private async loadAllChunks(): Promise<Chunk[]> {
-    const { readFile } = await import('fs/promises');
+  private async getChunksPath(): Promise<string> {
     const { join, dirname } = await import('path');
     const { fileURLToPath } = await import('url');
+    const { access } = await import('fs/promises');
     
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = dirname(__filename);
     const chunksPath = join(__dirname, '../../output/text_chunks.jsonl');
     
-    const content = await readFile(chunksPath, 'utf-8');
-    const chunks: Chunk[] = content
-      .split('\n')
-      .filter(line => line.trim())
-      .map(line => JSON.parse(line));
+    try {
+      await access(chunksPath);
+      return chunksPath;
+    } catch (error) {
+      throw new Error(`Chunks file not found at ${chunksPath}. Please run 'npm run process-s1' to generate the chunks file.`);
+    }
+  }
+
+  /**
+   * Load all chunks from the file system with validation
+   */
+  private async loadAllChunks(): Promise<Chunk[]> {
+    const { readFile } = await import('fs/promises');
     
-    return chunks;
+    const chunksPath = await this.getChunksPath();
+    
+    try {
+      const content = await readFile(chunksPath, 'utf-8');
+      
+      if (!content.trim()) {
+        throw new Error('Chunks file is empty');
+      }
+      
+      const lines = content.split('\n').filter(line => line.trim());
+      
+      if (lines.length === 0) {
+        throw new Error('No valid lines found in chunks file');
+      }
+      
+      const chunks: Chunk[] = [];
+      let lineNumber = 0;
+      
+      for (const line of lines) {
+        lineNumber++;
+        try {
+          const chunk = JSON.parse(line);
+          
+          // Validate chunk structure
+          if (!chunk.id || typeof chunk.id !== 'string') {
+            console.warn(`⚠️  Invalid chunk ID at line ${lineNumber}, skipping`);
+            continue;
+          }
+          
+          if (!chunk.content || typeof chunk.content !== 'string') {
+            console.warn(`⚠️  Invalid chunk content at line ${lineNumber}, skipping`);
+            continue;
+          }
+          
+          chunks.push(chunk);
+        } catch (parseError) {
+          console.warn(`⚠️  Failed to parse JSON at line ${lineNumber}: ${parseError}, skipping`);
+          continue;
+        }
+      }
+      
+      if (chunks.length === 0) {
+        throw new Error(`No valid chunks found in ${lines.length} lines`);
+      }
+      
+      console.log(`📊 Successfully parsed ${chunks.length} valid chunks from ${lines.length} total lines`);
+      return chunks;
+      
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('ENOENT')) {
+        throw new Error(`Could not read chunks file: ${chunksPath}. File may not exist.`);
+      }
+      throw error;
+    }
   }
   
   /**
