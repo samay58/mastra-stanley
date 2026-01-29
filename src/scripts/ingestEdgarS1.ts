@@ -56,6 +56,15 @@ async function main() {
   const indexHtmlPath = join(filing.rawDir, 'index.html');
   const indexHtml = await fetchTextCached(urls.indexHtmlUrl, indexHtmlPath, { userAgent, forceDownload });
 
+  // Best-effort cache of `index.json` for debugging and future hardening. Some filings may not expose it,
+  // so treat failures as non-fatal.
+  const indexJsonPath = join(filing.rawDir, 'index.json');
+  try {
+    await fetchTextCached(urls.indexJsonUrl, indexJsonPath, { userAgent, forceDownload });
+  } catch (err) {
+    console.warn(`⚠️  Failed to fetch index.json (optional): ${err instanceof Error ? err.message : String(err)}`);
+  }
+
   const docs = parseIndexHtmlForDocuments(indexHtml, urls.baseDirUrl);
   const primary = selectPrimaryS1Document(docs);
 
@@ -102,4 +111,3 @@ main().catch(err => {
   console.error('Ingestion failed:', err instanceof Error ? err.message : err);
   process.exit(1);
 });
-
