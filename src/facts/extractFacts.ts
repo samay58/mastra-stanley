@@ -31,7 +31,7 @@ function extractNumericLikeTokens(cellRaw: string): string[] {
     .replace(/[）]/g, ')');
 
   // Pull out number-ish tokens; keep punctuation for evidence but ensure at least one digit.
-  const matches = cell.match(/(?:\(|-)?\s*\$?\s*\d[\d,\.]*%?\s*\)?/g) || [];
+  const matches = cell.match(/(?:\(|-)?\s*\$?\s*\d[\d,\.]*(?:\s*%)?\s*\)?/g) || [];
   return matches.map(t => normalizeWhitespace(t)).filter(t => /\d/.test(t));
 }
 
@@ -61,6 +61,17 @@ function inferUnitAndScale(table: TableData): { unit?: string; scale?: string } 
         ? 'billions'
         : undefined;
   return { unit, scale };
+}
+
+function looksLikePeriodLabel(label: string): boolean {
+  const s = normalizeWhitespace(label);
+  if (!s) return false;
+  if (/\b20\d{2}\b/.test(s)) return true;
+  if (/\b(as of|year ended|three months ended|six months ended|nine months ended|quarter ended)\b/i.test(s)) return true;
+  if (/\b(january|february|march|april|may|june|july|august|september|october|november|december)\b/i.test(s)) return true;
+  // Short month forms (Mar, Sep, etc.)
+  if (/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i.test(s)) return true;
+  return false;
 }
 
 function buildFactId(filingId: string, canonicalKey: string, value: string, period?: string, dims?: Record<string, string>): string {
@@ -166,6 +177,7 @@ function extractFinancialFactsFromTables(filingId: string, tables: TableData[]):
       for (let col = 1; col < Math.min(row.length, header.length); col++) {
         const periodLabel = normalizeWhitespace(String(header[col] || ''));
         if (!periodLabel) continue;
+        if (!looksLikePeriodLabel(periodLabel)) continue;
 
         const cellValue = String(row[col] || '').trim();
         if (!cellValue) continue;
@@ -300,11 +312,159 @@ function extractOfferingTermsFromChunks(filingId: string, chunks: Chunk[]): Fact
   return facts;
 }
 
-function extractOwnershipFactsFromTables(_filingId: string, _tables: TableData[]): Fact[] {
-  // Ownership tables vary dramatically by issuer and are often the messiest HTML in filings.
-  // We intentionally keep v1 conservative: build the framework first, then add a high-precision
-  // extractor once we have cleaner, real EDGAR examples to validate against.
-  return [];
+function parsePercent(token: string): number | null {
+  const cleaned = normalizeWhitespace(token)
+    .replace(/%/g, '')
+    .replace(/,/g, '');
+  const value = Number.parseFloat(cleaned);
+  return Number.isFinite(value) ? value : null;
+}
+
+function extractOwnershipFactsFromTables(filingId: string, tables: TableData[]): Fact[] {
+  const facts: Fact[] = [];
+
+  const isOwnershipTable = (table: TableData): boolean => {
+    const section = (table.section || '').toLowerCase();
+    if (section.includes('stockholder') || section.includes('stockholders') || section.includes('ownership')) return true;
+
+    const header = Array.isArray(table.header) ? table.header.join(' ') : '';
+    if (/beneficial owner|beneficially owned|voting power/i.test(header) && /%/.test(header)) return true;
+
+    const title = table.title || table.caption || '';
+    if (/beneficial owner|principal and selling stockholders/i.test(title)) return true;
+
+    return false;
+  };
+
+  for (const table of tables) {
+    if (!isOwnershipTable(table)) continue;
+
+    const header = Array.isArray(table.header) ? table.header : undefined;
+    if (!header || header.length < 3) continue;
+
+    const dataStart = Number.isFinite(table.data_start_row) ? (table.data_start_row as number) : 0;
+    const dataRows = table.data.slice(dataStart).filter((row): row is string[] => Array.isArray(row));
+
+    const percentCols = header
+      .map((h, idx) => ({ idx, h: normalizeWhitespace(String(h || '')) }))
+      .filter(({ idx, h }) => idx > 0 && h.length > 0 && (h.includes('%') || /percent/i.test(h)));
+
+    const shareCols = header
+      .map((h, idx) => ({ idx, h: normalizeWhitespace(String(h || '')) }))
+      .filter(({ idx, h }) => idx > 0 && h.length > 0 && (/shares?/i.test(h) || /number/i.test(h)));
+
+    if (percentCols.length === 0 && shareCols.length === 0) continue;
+
+    for (const row of dataRows) {
+      const holder = normalizeWhitespace(String(row[0] || ''));
+      if (!holder) continue;
+
+      // Skip obvious header-ish rows in the body.
+      if (/name of beneficial owner/i.test(holder)) continue;
+
+      for (const { idx: col, h: columnLabel } of percentCols) {
+        if (col >= row.length) continue;
+        const cell = String(row[col] || '').trim();
+        if (!cell) continue;
+
+        const token = pickSingleNumericToken(cell);
+        if (!token || !token.includes('%')) continue;
+
+        const kind = /voting/i.test(columnLabel) ? 'voting_power' : 'ownership';
+        const canonical_key = kind === 'voting_power' ? 'voting_power_percent' : 'ownership_percent';
+
+        const evidence: FactEvidence = {
+          type: 'table_cell',
+          source_url: table.source_url,
+          anchor: table.anchor,
+          table_filename: table.filename,
+          table_caption: table.caption,
+          row_index: dataStart + dataRows.indexOf(row),
+          col_index: col,
+          row_label: holder,
+          column_label: columnLabel,
+          quote: `${holder} | ${columnLabel}: ${token}`,
+        };
+
+        const dimensions: Record<string, string> = { holder, column: columnLabel };
+
+        facts.push({
+          fact_id: buildFactId(filingId, canonical_key, token, undefined, dimensions),
+          filing_id: filingId,
+          fact_type: 'ownership',
+          canonical_key,
+          value: token,
+          unit: '%',
+          dimensions,
+          evidence: [evidence],
+          created_at: isoNow(),
+        });
+
+        const p = parsePercent(token);
+        if (p !== null && p >= 5) {
+          facts.push({
+            fact_id: buildFactId(filingId, 'five_percent_holder', token, undefined, dimensions),
+            filing_id: filingId,
+            fact_type: 'ownership',
+            canonical_key: 'five_percent_holder',
+            value: token,
+            unit: '%',
+            dimensions,
+            evidence: [evidence],
+            created_at: isoNow(),
+          });
+        }
+      }
+
+      for (const { idx: col, h: columnLabel } of shareCols) {
+        if (col >= row.length) continue;
+        const cell = String(row[col] || '').trim();
+        if (!cell) continue;
+
+        const token = pickSingleNumericToken(cell);
+        if (!token) continue;
+        if (token.includes('%')) continue;
+
+        const labelLower = columnLabel.toLowerCase();
+        const canonical_key = labelLower.includes('offered')
+          ? 'shares_offered'
+          : labelLower.includes('after')
+            ? 'shares_after_offering'
+            : labelLower.includes('before')
+              ? 'shares_before_offering'
+              : 'ownership_shares';
+
+        const evidence: FactEvidence = {
+          type: 'table_cell',
+          source_url: table.source_url,
+          anchor: table.anchor,
+          table_filename: table.filename,
+          table_caption: table.caption,
+          row_index: dataStart + dataRows.indexOf(row),
+          col_index: col,
+          row_label: holder,
+          column_label: columnLabel,
+          quote: `${holder} | ${columnLabel}: ${token}`,
+        };
+
+        const dimensions: Record<string, string> = { holder, column: columnLabel };
+
+        facts.push({
+          fact_id: buildFactId(filingId, canonical_key, token, undefined, dimensions),
+          filing_id: filingId,
+          fact_type: 'ownership',
+          canonical_key,
+          value: token,
+          unit: 'shares',
+          dimensions,
+          evidence: [evidence],
+          created_at: isoNow(),
+        });
+      }
+    }
+  }
+
+  return facts;
 }
 
 export async function extractFactsForFiling(filing: FilingContext): Promise<Fact[]> {
@@ -322,4 +482,3 @@ export async function extractFactsForFiling(filing: FilingContext): Promise<Fact
   await writeFile(filing.factsPath, JSON.stringify(facts, null, 2), 'utf-8');
   return facts;
 }
-
