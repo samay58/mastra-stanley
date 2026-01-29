@@ -7,6 +7,7 @@ import { join } from 'path';
 
 import { S1Processor } from '../processor/S1Processor.js';
 import { EmbeddingGenerator } from '../embeddings/generate-embeddings.js';
+import { extractFactsForFiling } from '../facts/extractFacts.js';
 import { getFilingContext } from '../config/filing.js';
 import {
   buildFilingUrls,
@@ -59,11 +60,12 @@ async function main() {
 
   if (!cik || !accession) {
     console.error('Usage:');
-    console.error('  npm run s1:up -- --cik 0000000000 --accession 0000000000-00-000000 [--filing-id my_s1] [--force] [--skip-embed] [--skip-ui]');
+    console.error('  npm run s1:up -- --cik 0000000000 --accession 0000000000-00-000000 [--filing-id my_s1] [--force] [--skip-facts] [--skip-embed] [--skip-ui]');
     process.exit(1);
   }
 
   const forceDownload = hasFlag('force');
+  const skipFacts = hasFlag('skip-facts');
   const skipEmbed = hasFlag('skip-embed');
   const skipUi = hasFlag('skip-ui');
   const noProcess = hasFlag('no-process');
@@ -126,6 +128,14 @@ async function main() {
     console.log('\nSkipping chunking/processing (flag: --no-process).');
   }
 
+  if (!skipFacts) {
+    console.log('\nExtracting citation-backed facts...');
+    const facts = await extractFactsForFiling(filing);
+    console.log(`✓ Extracted ${facts.length} facts (${filing.factsPath})`);
+  } else {
+    console.log('\nSkipping fact extraction (flag: --skip-facts).');
+  }
+
   if (!skipEmbed) {
     requireEnv('OPENAI_API_KEY');
     requireEnv('POSTGRES_CONNECTION_STRING');
@@ -151,4 +161,3 @@ main().catch(err => {
   console.error('s1:up failed:', err instanceof Error ? err.message : err);
   process.exit(1);
 });
-

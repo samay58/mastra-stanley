@@ -7,6 +7,7 @@ import { openai } from '@ai-sdk/openai';
 import { Memory } from '@mastra/memory';
 import { PgVector, PostgresStore } from '@mastra/pg';
 import { s1EnhancedSearchTool, s1TableLookupTool, s1TableDataTool } from '../tools/vectorQuery.js';
+import { s1FactsLookupTool } from '../tools/facts.js';
 
 /**
  * Financial Analysis Agent
@@ -52,7 +53,8 @@ You analyze S-1 filings for equity research. Focus on revenue model analysis, pr
 ## Operating Principles (No-Slop)
 - Use tools to retrieve evidence from the active filing.
 - Do not invent numbers or labels. If a value/period is not supported by the filing, write "Not found in filing" and set confidence_level to "Low".
-- Prefer tableDataReader for numeric values; cite the table filename/caption and HTML anchor when available.
+- Prefer lookupS1Facts for numeric values (fast, citation-backed). Fall back to tableDataReader if needed.
+- Cite the table filename/caption and HTML anchor when available.
 
 ## Financial Analysis Framework
 
@@ -161,6 +163,7 @@ You analyze S-1 filings for equity research. Focus on revenue model analysis, pr
 Always ground your analysis in specific S-1 document data. Search extensively for financial tables, management commentary, and quantitative metrics. If data is missing or unclear, note this in your confidence assessment.
 `,
   tools: {
+    lookupS1Facts: s1FactsLookupTool,
     enhancedS1Search: s1EnhancedSearchTool,
     tableSearch: s1TableLookupTool,
     tableDataReader: s1TableDataTool

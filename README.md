@@ -11,6 +11,7 @@ cp .env.example .env
 
 # Prepare data (embeddings) then try a query
 npm run process-s1   # uses ./figmas1_content_list.json by default (fixture)
+npm run facts        # extract citation-backed facts for fast numeric/offering answers (optional but recommended)
 npm run embed
 npm run query "What is the IPO price range?"
 

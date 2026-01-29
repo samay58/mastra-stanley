@@ -4,8 +4,11 @@ export * from './mastra/index.js';
 export * from './agents/s1QueryAgent.js';
 export * from './workflows/s1QueryWorkflow.js';
 export * from './tools/vectorQuery.js';
+export * from './tools/facts.js';
 export * from './processor/S1Processor.js';
 export { EmbeddingGenerator } from './embeddings/generate-embeddings.js';
+export * from './facts/types.js';
+export * from './facts/extractFacts.js';
 export { queryS1 } from './query.js';
 export * from './types/index.js';
 

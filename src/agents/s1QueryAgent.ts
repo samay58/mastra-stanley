@@ -14,6 +14,7 @@ import {
   s1HybridSearchTool,
   s1EnhancedSearchTool
 } from '../tools/vectorQuery.js';
+import { s1FactsLookupTool } from '../tools/facts.js';
 
 // Create memory system for S-1 analysis with context retention
 const memory = new Memory({
@@ -55,6 +56,10 @@ export const s1QueryAgent = new Agent({
 - Try with useHyDE=true if initial results are poor
 - Fallback to hybridS1Search or searchS1WithRerank if needed
 
+**For Numeric / Offering-Term Questions (PREFERRED FAST PATH)**:
+- Use lookupS1Facts first (facts are extracted deterministically with citations).
+- Only state a number if you can cite a fact evidence object or a table row/value with an anchor/source_url.
+
 **For Table / Numeric Data (PREFERRED)**:
 - Use tableDataReader to fetch the exact row(s) and period(s) from extracted tables.
 - Only state a number if you can quote the row/value and cite the table anchor/section.
@@ -91,6 +96,7 @@ export const s1QueryAgent = new Agent({
 Remember: This S-1 contains comprehensive financial information. If basic queries about revenue/ownership return limited results, refine your search terms and try multiple approaches.`,
   
   tools: {
+    lookupS1Facts: s1FactsLookupTool,
     enhancedS1Search: s1EnhancedSearchTool,
     searchS1Document: s1VectorQueryTool,
     searchS1WithRerank: s1SearchWithRerankTool,
