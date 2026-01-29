@@ -371,9 +371,13 @@ export class HybridSearcher {
       let boostFactor = 1.0;
       const chunkText = result.chunk.content.toLowerCase();
       const sectionPath = result.chunk.metadata.section_hierarchy?.toLowerCase() || '';
+      const chunkType = result.chunk.metadata.chunk_type || 'text';
       
       // Boost based on query type
       if (lowerQuery.includes('revenue') || lowerQuery.includes('income')) {
+        if (chunkType === 'financial_statements' || chunkType === 'mdna') {
+          boostFactor *= 1.35;
+        }
         if (chunkText.includes('$') && chunkText.includes('million')) {
           boostFactor *= 1.5;
         }
@@ -383,11 +387,20 @@ export class HybridSearcher {
       }
       
       if (lowerQuery.includes('ownership')) {
+        if (chunkType === 'ownership' || chunkType === 'capital_structure') {
+          boostFactor *= 1.35;
+        }
         if (chunkText.includes('%') && chunkText.includes('shares')) {
           boostFactor *= 1.5;
         }
         if (sectionPath.includes('stockholder') || sectionPath.includes('ownership')) {
           boostFactor *= 1.3;
+        }
+      }
+
+      if (lowerQuery.includes('risk') || lowerQuery.includes('risk factor')) {
+        if (chunkType === 'risk_factor') {
+          boostFactor *= 1.35;
         }
       }
       
