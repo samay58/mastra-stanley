@@ -21,6 +21,9 @@
     "test-financial-agent": "tsx examples/agent_quick_check.ts",
     "preview-table-tool": "tsx examples/table_tool_preview.ts",
     "test": "npm run build && node --test tests/*.test.js",
+    "eval:retrieval": "npm run build && node dist/scripts/evalRetrieval.js",
+    "eval:answers": "npm run build && node dist/scripts/evalAnswers.js",
+    "eval": "npm run eval:retrieval && npm run eval:answers",
     "mastra:dev": "mastra dev"
   },
   "keywords": [

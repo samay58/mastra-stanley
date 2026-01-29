@@ -111,7 +111,7 @@ const searchStep = createStep({
     }))
   }),
   execute: async ({ inputData, runtimeContext }) => {
-    const { searchTerms, needsTables, sections } = inputData;
+    const { searchTerms, needsTables } = inputData;
     
     // Perform text search with re-ranking
     const searchPromises = searchTerms.map(term => 
@@ -120,7 +120,11 @@ const searchStep = createStep({
           query: term,
           topK: 10,
           rerankTopK: 5,
-          filter: sections.length > 0 ? { section_path: sections[0] } : undefined
+          // NOTE: our vector-store metadata stores `section_path` as a joined string and
+          // the values here are inconsistent across filings. Section filtering is
+          // valuable, but do it via chunk_type priors/reranking rather than brittle
+          // equality filters.
+          filter: undefined
         },
         runtimeContext
       })

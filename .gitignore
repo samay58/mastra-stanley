@@ -10,3 +10,4 @@ node_modules/
 dist/
 .mastra/
 output/
+eval/results/
