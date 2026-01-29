@@ -316,7 +316,15 @@ export class S1Processor {
         chunks.push(chunk);
       }
 
-      // Move forward with overlap
+      // If we consumed to the end of the input, stop. Continuing with overlap would create
+      // a tail of near-duplicate chunks (pathological chunk explosion).
+      if (endPos >= text.length) {
+        break;
+      }
+
+      // Move forward with overlap.
+      // `endPos - overlap` should normally advance us by ~maxChunkSize-overlap. The
+      // `currentPos + 1` guard ensures progress even if overlap params are misconfigured.
       currentPos = Math.max(currentPos + 1, endPos - overlap);
     }
 
