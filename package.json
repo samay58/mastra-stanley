@@ -9,6 +9,7 @@
     "build": "tsc",
     "process-s1": "tsx src/processor/process-s1.ts",
     "ingest:edgar": "tsx src/scripts/ingestEdgarS1.ts",
+    "s1:up": "tsx src/scripts/s1Up.ts",
     "embed": "tsx src/embeddings/generate-embeddings.ts",
     "query": "tsx src/query.ts",
     "query-structured": "tsx src/query-structured.ts",

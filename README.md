@@ -31,6 +31,11 @@ npm run embed
 npm run query "What is the IPO price range?"
 ```
 
+## One command: ingest -> process -> embed -> UI
+```bash
+npm run s1:up -- --cik <CIK> --accession <ACCESSION> --filing-id my-s1
+```
+
 ## Options and examples
 
 Scripts: `process-s1`, `embed`, `query`, `query-structured`, `generate-report`, `mastra:dev`
