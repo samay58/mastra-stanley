@@ -1,75 +1,30 @@
-# IPO S-1 Agent
+# Mastra Stanley (S-1 Agent)
 
-## What it is
-A small TypeScript toolkit that processes and queries S-1 filings, and can generate a comprehensive investment research report. It uses PostgreSQL with pgvector for retrieval and OpenAI for embeddings/agents.
+Mastra-first S-1 analysis toolkit:
+- Ingest (SEC EDGAR HTML) -> parse anchors/tables -> chunk -> extract facts -> embed -> query in Mastra UI
+- **One S-1 filing at a time** (controlled by `S1_FILING_ID`)
 
-## Quick start
-```bash
-npm install
-cp .env.example .env
-# Fill in .env: OPENAI_API_KEY, POSTGRES_CONNECTION_STRING, SEC_USER_AGENT
-
-# Prepare data (embeddings) then try a query
-npm run process-s1   # uses ./figmas1_content_list.json by default (fixture)
-npm run facts        # extract citation-backed facts for fast numeric/offering answers (optional but recommended)
-npm run embed
-npm run query "What is the IPO price range?"
-
-# Full report (multi-step; runtime depends on model + retrieval)
-npm run generate-report
-```
-
-## Ingest a real S-1 from EDGAR (HTML)
-```bash
-# Example formats:
-#   --cik 0001234567
-#   --accession 0001234567-26-000001
-# Use real values from EDGAR.
-npm run ingest:edgar -- --cik <CIK> --accession <ACCESSION> --filing-id my-s1
-
-# Then set S1_FILING_ID=my-s1 (in your shell or .env) and run:
-npm run embed
-npm run query "What is the IPO price range?"
-```
-
-## One command: ingest -> process -> embed -> UI
-```bash
-npm run s1:up -- --cik <CIK> --accession <ACCESSION> --filing-id my-s1
-```
-
-## Options and examples
-
-Scripts: `process-s1`, `embed`, `query`, `query-structured`, `generate-report`, `mastra:dev`
-
-Examples:
+## Quick Start (fast, local)
 
 ```bash
-# Quick agent sanity check
-npx tsx examples/agent_quick_check.ts
-
-# Table tool preview
-npx tsx examples/table_tool_preview.ts
-
-# Interactive playground
-npx mastra dev  # http://localhost:4111
+npm ci
+npm test
+npm run process-s1
+npm run eval:retrieval
 ```
 
-## How it works
+## Real EDGAR S-1 (one command)
 
-Document chunks and tables are indexed with pgvector. An agentic workflow uses retrieval results to answer queries or generate a report.
+```bash
+# Requires: SEC_USER_AGENT, OPENAI_API_KEY, POSTGRES_CONNECTION_STRING
+npm run s1:up -- --cik <CIK> --accession <ACCESSION> --filing-id <my-s1>
+```
 
-Per-filing artifacts are saved to `output/filings/<filingId>/`.
+## Testing
 
-## Sessions
+See `docs/TESTING.md` for the full, step-by-step test flow (fixture + pgvector + EDGAR + evals).
 
-Development logs live in `session-logs/` and are gitignored. You can keep local notes there without committing them.
+## Output Artifacts
 
-## Examples
-
-See `examples/`:
-- `agent_quick_check.ts` for a fast sanity check.
-- `table_tool_preview.ts` for a quick table extraction preview.
-
-## Notes
-
-Minimal dependencies. No telemetry. Friendly CLI defaults.
+Per-filing artifacts are written to `output/filings/<filingId>/` (gitignored), including:
+`content_list.json`, `text_chunks.jsonl`, `tables_manifest.json`, `sections_manifest.json`, `facts.json`, and EDGAR `raw/` cache.
