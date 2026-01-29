@@ -9,6 +9,7 @@
  */
 
 import dotenv from 'dotenv';
+import { getActiveFilingContext } from '../config/filing.js';
 
 // Load environment variables
 dotenv.config();
@@ -31,12 +32,7 @@ async function initializeAndValidate() {
     // Step 2: Check chunks file
     console.log('📋 Step 2: Chunks File Check');
     const { access } = await import('fs/promises');
-    const { join, dirname } = await import('path');
-    const { fileURLToPath } = await import('url');
-    
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const chunksPath = join(__dirname, '../../output/text_chunks.jsonl');
+    const chunksPath = getActiveFilingContext().chunksPath;
     
     try {
       await access(chunksPath);
@@ -73,9 +69,9 @@ async function initializeAndValidate() {
     
     const testQueries = [
       'revenue growth',
-      'Dylan Field ownership',
+      'beneficial ownership',
       'risk factors',
-      'financial performance'
+      'financial statements'
     ];
 
     for (const query of testQueries) {
@@ -116,9 +112,11 @@ async function initializeAndValidate() {
         model: openai.embedding('text-embedding-3-small'),
         value: 'test query'
       });
+
+      const indexName = process.env.S1_VECTOR_INDEX?.trim() || 's1_embeddings';
       
       const vectorResults = await vectorStore.query({
-        indexName: 's1_embeddings',
+        indexName,
         queryVector: embedding,
         topK: 1
       });
@@ -130,10 +128,7 @@ async function initializeAndValidate() {
 
     // Step 6: System health summary
     console.log('📋 Step 6: System Health Summary');
-    console.log('🎉 All systems operational!');
-    console.log('✅ Hybrid search is ready for workflow execution');
-    console.log('✅ Search tools should work without fallback');
-    console.log('✅ Investment research workflow should run successfully\n');
+    console.log('✅ Basic hybrid search checks passed\n');
 
     console.log('🚀 You can now run:');
     console.log('  • npm run test-workflow');

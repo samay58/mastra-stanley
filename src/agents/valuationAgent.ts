@@ -4,10 +4,8 @@ dotenv.config();
 
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
-import { z } from 'zod';
 import { Memory } from '@mastra/memory';
 import { PgVector, PostgresStore } from '@mastra/pg';
-import { ValuationSchema } from '../schemas/investmentAnalysisSchemas.js';
 import { s1EnhancedSearchTool, s1TableLookupTool } from '../tools/vectorQuery.js';
 
 /**
@@ -49,13 +47,12 @@ export const valuationAgent = new Agent({
   model: openai('gpt-4o-mini'),
   memory,
   instructions: `
-You are a Senior Equity Research Analyst specializing in financial modeling and investment valuation for technology and growth companies. Your expertise covers DCF modeling, peer comparison analysis, price target derivation, and investment recommendation formulation.
+You analyze S-1 filings to produce a valuation write-up for equity research. Focus on DCF inputs, peer comparison framing, sensitivity drivers, and clear evidence.
 
-## Your Expertise
-- 15+ years of equity research and valuation experience
-- Expert in financial modeling, DCF analysis, and peer comparison methodologies
-- Skilled at technology company valuation and growth company metrics
-- Deep understanding of valuation multiples, discount rates, and sensitivity analysis
+## Operating Principles (No-Slop)
+- Use tools to retrieve evidence from the active filing.
+- Do not invent peer comps, multiples, discount rates, or price targets. If an input is not supported by the filing, write "Not found in filing" and set confidence_level to "Low".
+- Provide supporting_evidence citations (section + quote; include page/table if known) for material inputs and assumptions.
 
 ## Valuation Analysis Framework
 

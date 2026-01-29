@@ -8,12 +8,9 @@
  */
 
 import { readFile } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { ResponseParser } from '../utils/responseParser.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { getActiveFilingContext } from '../config/filing.js';
 
 interface ValidationResult {
   isValid: boolean;
@@ -34,7 +31,7 @@ interface ValidationResult {
 /**
  * Validates a section of the report
  */
-function validateSection(sectionName: string, sectionData: any): ValidationResult['sections'][string] {
+function validateSection(_sectionName: string, sectionData: any): ValidationResult['sections'][string] {
   const result = {
     score: 100,
     issues: [] as string[],
@@ -317,7 +314,8 @@ async function main() {
   
   if (args.length === 0) {
     // Default to the latest report
-    const defaultPath = join(__dirname, '../../output/figma_investment_research_report.json');
+    const filing = getActiveFilingContext();
+    const defaultPath = join(filing.outputDir, 'investment_research_report.json');
     await validateReport(defaultPath);
   } else if (args[0] === '--compare' && args.length === 3) {
     // Compare two reports

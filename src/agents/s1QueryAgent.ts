@@ -4,13 +4,13 @@ dotenv.config();
 
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
-import { embed } from 'ai';
 import { Memory } from '@mastra/memory';
 import { PgVector, PostgresStore } from '@mastra/pg';
 import { 
   s1VectorQueryTool, 
   s1SearchWithRerankTool, 
   s1TableLookupTool,
+  s1TableDataTool,
   s1HybridSearchTool,
   s1EnhancedSearchTool
 } from '../tools/vectorQuery.js';
@@ -42,10 +42,10 @@ Use this context to provide more comprehensive and connected analysis.`
 
 export const s1QueryAgent = new Agent({
   name: 'S1QueryAgent',
-  description: 'An expert agent for analyzing and answering questions about Figma\'s S-1 IPO filing document',
+  description: 'An expert agent for analyzing and answering questions about an S-1 IPO filing document',
   model: openai('gpt-4o-mini'),
   memory,
-  instructions: `You are an expert financial analyst specializing in S-1 IPO filings. You have access to Figma's complete S-1 document with enhanced search capabilities.
+  instructions: `You are an expert financial analyst specializing in S-1 IPO filings. You have access to the active S-1 document via search and table tools.
 
 ## SEARCH STRATEGY (CRITICAL)
 **ALWAYS START WITH**: enhancedS1Search - This uses advanced query expansion and hybrid search
@@ -55,10 +55,12 @@ export const s1QueryAgent = new Agent({
 - Try with useHyDE=true if initial results are poor
 - Fallback to hybridS1Search or searchS1WithRerank if needed
 
-**For Table Data**: Use lookupS1Table first, then search for context
+**For Table / Numeric Data (PREFERRED)**:
+- Use tableDataReader to fetch the exact row(s) and period(s) from extracted tables.
+- Only state a number if you can quote the row/value and cite the table anchor/section.
 
 **Search Tips**:
-- Natural questions work: "What is Figma's revenue?" 
+- Natural questions work: "What is the company's revenue?" 
 - The enhanced search handles synonyms: revenue = income = earnings
 - Adjustable vectorWeight: lower (0.3-0.5) for exact matches, higher (0.7-0.9) for conceptual search
 
@@ -80,8 +82,9 @@ export const s1QueryAgent = new Agent({
 **Confidence Level**: High/Medium/Low
 
 ## QUALITY REQUIREMENTS
-- **Find the actual financial data** - revenue was $749M in 2024, 48% YoY growth
-- **Cite specific sections and pages** from the S-1 document
+- **Do not use prior knowledge**. Only use what you can retrieve from the tools.
+- **Cite specific sections and anchors** from the S-1 document.
+- **Do not invent numbers**. If the exact value/period isn't found, say so and explain what you searched.
 - **Search thoroughly** - if you don't find detailed data, try different search terms
 - **Prioritize quantitative data** over general statements
 
@@ -92,7 +95,8 @@ Remember: This S-1 contains comprehensive financial information. If basic querie
     searchS1Document: s1VectorQueryTool,
     searchS1WithRerank: s1SearchWithRerankTool,
     hybridS1Search: s1HybridSearchTool,
-    lookupS1Table: s1TableLookupTool
+    lookupS1Table: s1TableLookupTool,
+    tableDataReader: s1TableDataTool
   }
 });
 
@@ -101,7 +105,7 @@ export const s1BasicAgent = new Agent({
   name: 'S1BasicAgent', 
   description: 'A streamlined agent for quick S-1 document lookups',
   model: openai('gpt-4o-mini'),
-  instructions: `You are a helpful assistant for looking up information in Figma's S-1 filing. 
+  instructions: `You are a helpful assistant for looking up information in the active S-1 filing. 
   
 Use the search tool to find relevant information and provide concise, accurate answers.
 Always cite the section and page number when providing information.`,

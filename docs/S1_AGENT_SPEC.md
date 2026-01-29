@@ -9,24 +9,27 @@ Build an S-1-specific analysis system that is:
 - Useful: supports the real questions in `TEST-QUERIES.md` without “AI slop”.
 - Mastra-native: uses Mastra primitives (tools, workflows, RAG utilities) rather than a bespoke framework.
 
-This repo currently has the bones of a system for **Figma’s S-1**, but it needs a re-cut around (1) ingestion, (2) S-1-aware chunking, (3) structured facts, and (4) evaluation/quality gates.
+This repo ships with a **single-filing fixture** (the historical Figma content list) and the bones of a generic S-1 system, but it needs a re-cut around (1) ingestion, (2) S-1-aware chunking, (3) structured facts, and (4) evaluation/quality gates.
 
 ## 1) What The Repo Is Today (Deep Scrub)
 
 ### Current pipeline (as implemented)
-1. **Input**: `figmas1_content_list.json` (pre-extracted elements: `text`/`table`/`image`).
+1. **Input**:
+   - Fixture: `figmas1_content_list.json` (pre-extracted elements: `text`/`table`/`image`)
+   - Real filings: `npm run ingest:edgar` writes `output/filings/<filingId>/content_list.json` from SEC EDGAR HTML
 2. **Processing**: `src/processor/S1Processor.ts`
    - Detects headings via `MAJOR_SECTIONS` + `text_level`.
    - Streams elements into “chunks” with `section_path` metadata.
-   - Extracts tables via regex HTML parsing and writes CSVs to `output/tables/`.
-   - Writes `output/text_chunks.jsonl` and `output/mastra_import.json`.
+   - Extracts tables and writes CSVs to `output/filings/<filingId>/tables/` plus a `tables_manifest.json`.
+   - Writes `output/filings/<filingId>/text_chunks.jsonl` and `output/filings/<filingId>/mastra_import.json`.
 3. **Embedding + index**: `src/embeddings/generate-embeddings.ts`
-   - Creates/replaces pgvector index `s1_embeddings` every run.
+   - Upserts into pgvector index `${S1_VECTOR_INDEX:-s1_embeddings}`.
+   - Only deletes/recreates the index when `S1_REPLACE_VECTOR_INDEX=true` (otherwise it continues if the index exists).
    - Embeds chunk text with `text-embedding-3-small` and upserts.
 4. **Retrieval tools**: `src/tools/vectorQuery.ts`
    - `searchS1Document` (pure vector), `searchS1WithRerank` (vector + heuristics),
      `hybridS1Search` (vector + keyword scoring), `enhancedS1Search` (vector + BM25 + query expansion),
-     plus table lookup/data tools that read CSVs from disk.
+     plus table lookup/data tools that read CSVs from disk for the active filing (`S1_FILING_ID`).
 5. **Agents/workflows**:
    - `S1QueryAgent` for Q&A; specialized agents for report generation.
    - `s1QueryWorkflow` and a large `investmentResearchWorkflow`.
@@ -36,17 +39,17 @@ This repo currently has the bones of a system for **Figma’s S-1**, but it need
 
 ### Why it doesn’t “actually work” reliably yet
 Key blockers and failure modes:
-- **Hard-coded to Figma**: prompts, chunk IDs (`figma-s1-chunk-*`), query expander, table heuristics, workflow “known counts”.
-- **Ingestion gap**: there’s no first-class pipeline to fetch and parse a fresh S-1 from SEC EDGAR. The system assumes a prebuilt `*_content_list.json`.
+- **Still partially filing-specific**: some prompts/heuristics are still biased toward the fixture; needs a full de-Figma pass (and removal of any invented numbers).
+- **Ingestion is v1**: EDGAR HTML ingestion exists (`npm run ingest:edgar`), but needs hardening (multi-doc selection, exhibits, PDF/page citations, retries, and table parsing quality).
 - **Chunking isn’t S-1-aware enough**:
-  - Fixed-size char chunking; no token budgeting; no chunk typing.
+- Fixed-size char chunking; no token budgeting; only coarse chunk typing (`text` vs `table_reference`).
   - Section hierarchy depends on `text_level`, which is mostly missing in the sample input.
-  - Tables are referenced inside text chunks but not indexed as first-class structured objects.
+- Tables are referenced inside text chunks and there are `table_reference` chunks + a `tables_manifest.json`, but table parsing is still simplistic and row-level retrieval is not yet robust.
 - **Numeric questions are structurally hard**:
   - Embeddings alone aren’t great at “exact-number” retrieval.
   - Some prompts hard-code “expected” numbers (risk of hallucination).
 - **Performance pitfalls**:
-  - Re-creating the vector index on every embedding run.
+  - Index management and search initialization still need tightening, but we no longer delete/recreate the pgvector index by default (only when `S1_REPLACE_VECTOR_INDEX=true`).
   - Tool execution re-initializes clients repeatedly.
   - Hybrid BM25 builds in-memory from JSONL; ok for one doc, shaky for multi-doc scale.
 - **Quality control is not enforceable**:
@@ -344,6 +347,6 @@ Concrete friction observed in this repo pattern:
   - costs/latency per step
 
 ## 11) Open Questions
-- Do we require page-number citations (PDF), or are stable HTML anchors sufficient?
-- Are we targeting one filing at a time, or a corpus (cross-company comparisons)?
+- For v1, stable HTML anchors are sufficient (prefer `source_url#anchor`); PDF/page citations can be added later if needed.
+- For v1, the agent experience is one filing at a time (but keep everything `filing_id`-parameterized for future corpus use).
 - Do we want XBRL ingestion in v1, or later?

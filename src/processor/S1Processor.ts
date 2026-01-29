@@ -13,14 +13,19 @@ export class S1Processor {
   private contentListPath: string;
   private outputDir: string;
   private config: ProcessingConfig;
+  private filingId: string;
+  private sourceUrl?: string;
   
   constructor(
     contentListPath: string, 
     outputDir: string,
-    config: Partial<ProcessingConfig> = {}
+    config: Partial<ProcessingConfig> = {},
+    context: { filingId?: string; sourceUrl?: string } = {}
   ) {
     this.contentListPath = contentListPath;
     this.outputDir = outputDir;
+    this.filingId = (context.filingId || 'figma').trim();
+    this.sourceUrl = context.sourceUrl;
     this.config = {
       chunkSize: 1800, // Increased from 512 for better context preservation
       chunkOverlap: 300, // Increased from 50 for better context continuity  
@@ -93,6 +98,8 @@ export class S1Processor {
     const allTables: TableData[] = [];
     let currentChunkContent: string[] = [];
     let currentSectionPath: string[] = [];
+    let currentAnchor: string | undefined;
+    let currentChunkAnchor: string | undefined;
     let chunkId = 0;
     let tableCounter = 0;
 
@@ -106,6 +113,7 @@ export class S1Processor {
       const element = elements[i];
       const elemType = this.classifyElement(element);
       const content = element.text?.trim() || '';
+      const elementAnchor = element.anchor?.trim() || undefined;
 
       switch (elemType) {
         case 'MAJOR_HEADING':
@@ -116,10 +124,12 @@ export class S1Processor {
               chunkId++,
               currentChunkContent.join('\n\n'),
               currentSectionPath,
-              elements[i - 1]?.page_idx || 0
+              elements[i - 1]?.page_idx || 0,
+              currentChunkAnchor || currentAnchor
             );
             allChunks.push(chunk);
             currentChunkContent = [];
+            currentChunkAnchor = undefined;
           }
 
           // Update section path with enhanced tracking
@@ -128,7 +138,10 @@ export class S1Processor {
             console.log(`📁 Major Section: ${content}`);
           } else {
             // For sub-headings, maintain hierarchy with better logic
-            const level = element.text_level || 2;
+            const levelRaw = element.text_level || 2;
+            // Many extracted filings don't reliably encode heading levels.
+            // Treat level 1 headings as "child of major section" rather than a new root.
+            const level = Math.max(2, levelRaw);
             
             // Keep only the parent sections up to this level
             const maxParentSections = Math.max(0, level - 1);
@@ -142,12 +155,25 @@ export class S1Processor {
           }
 
           // Add heading to new chunk
+          if (elementAnchor) {
+            currentAnchor = elementAnchor;
+          }
+          if (!currentChunkAnchor && elementAnchor) {
+            currentChunkAnchor = elementAnchor;
+          }
           currentChunkContent.push(`# ${content}`);
           break;
 
         case 'TABLE':
           tableCounter++;
-          const tableData = await this.processTable(element, tableCounter, currentSectionPath);
+          if (elementAnchor) {
+            currentAnchor = elementAnchor;
+          }
+          if (!currentChunkAnchor && (elementAnchor || currentAnchor)) {
+            currentChunkAnchor = elementAnchor || currentAnchor;
+          }
+          const tableAnchor = elementAnchor || currentAnchor;
+          const tableData = await this.processTable(element, tableCounter, currentSectionPath, tableAnchor);
           if (tableData) {
             allTables.push(tableData);
             
@@ -158,14 +184,33 @@ export class S1Processor {
             const tableRef = `\n[TABLE ${tableCounter}] ${tableDescription}\n` +
                             `Section: ${sectionContext}\n` +
                             `Dimensions: ${tableData.rows} rows × ${tableData.cols} columns\n` +
-                            `File: ${tableData.filename}\n`;
+                            `File: ${tableData.filename}\n` +
+                            (tableData.anchor ? `Anchor: ${tableData.anchor}\n` : '');
             
             currentChunkContent.push(tableRef);
+
+            // Also index a table-focused chunk so retrieval can land on exact numeric context,
+            // then tools can refine via CSV/table resolvers.
+            const tableChunk = this.createChunk(
+              chunkId++,
+              this.formatTableChunkContent(tableCounter, tableDescription, sectionContext, tableData),
+              currentSectionPath,
+              element.page_idx,
+              tableData.anchor,
+              'table_reference'
+            );
+            allChunks.push(tableChunk);
           }
           break;
 
         case 'TEXT':
           if (content) {
+            if (elementAnchor) {
+              currentAnchor = elementAnchor;
+              if (!currentChunkAnchor) {
+                currentChunkAnchor = elementAnchor;
+              }
+            }
             currentChunkContent.push(content);
             
             // Check if we need to split chunk due to size
@@ -184,13 +229,15 @@ export class S1Processor {
                   chunkId++,
                   splitChunks[i],
                   currentSectionPath,
-                  element.page_idx
+                  element.page_idx,
+                  currentChunkAnchor || currentAnchor
                 );
                 allChunks.push(chunk);
               }
               
               // Keep the last split as current content for overlap
               currentChunkContent = [splitChunks[splitChunks.length - 1]];
+              currentChunkAnchor = currentChunkAnchor || currentAnchor;
             }
           }
           break;
@@ -208,7 +255,8 @@ export class S1Processor {
         chunkId++,
         currentChunkContent.join('\n\n'),
         currentSectionPath,
-        elements[elements.length - 1]?.page_idx || 0
+        elements[elements.length - 1]?.page_idx || 0,
+        currentChunkAnchor || currentAnchor
       );
       allChunks.push(chunk);
     }
@@ -323,15 +371,21 @@ export class S1Processor {
     id: number, 
     content: string, 
     sectionPath: string[],
-    pageIdx: number
+    pageIdx: number,
+    anchor?: string,
+    chunkType: ChunkMetadata['chunk_type'] = 'text'
   ): Chunk {
+    const padded = String(id).padStart(5, '0');
     const metadata: ChunkMetadata = {
-      id: `figma-s1-chunk-${String(id).padStart(4, '0')}`,
+      id: `${this.filingId}-chunk-${padded}`,
+      filing_id: this.filingId,
       text: content,
       section_path: sectionPath,
       section_hierarchy: sectionPath.join(' > '),
       page_idx: pageIdx,
-      chunk_type: 'text',
+      anchor,
+      source_url: this.sourceUrl,
+      chunk_type: chunkType,
       chunk_size: content.length,
       timestamp: new Date().toISOString()
     };
@@ -346,7 +400,8 @@ export class S1Processor {
   private async processTable(
     element: ContentElement, 
     tableNum: number, 
-    sectionPath: string[]
+    sectionPath: string[],
+    anchor?: string
   ): Promise<TableData | null> {
     if (!element.table_body) return null;
 
@@ -372,6 +427,9 @@ export class S1Processor {
       return {
         filename,
         section: sectionPath[sectionPath.length - 1] || 'Unknown',
+        anchor,
+        caption: element.table_caption?.join(' ') || undefined,
+        source_url: this.sourceUrl,
         rows: rows.length,
         cols: rows[0]?.length || 0,
         data: rows
@@ -422,20 +480,25 @@ export class S1Processor {
     ).join('\n');
   }
 
-  async saveOutputs(chunks: Chunk[]): Promise<void> {
+  async saveOutputs(chunks: Chunk[], tables: TableData[]): Promise<void> {
     // Save chunks as JSONL
     const jsonlPath = join(this.outputDir, 'text_chunks.jsonl');
     const jsonlContent = chunks.map(chunk => JSON.stringify(chunk)).join('\n');
     await writeFile(jsonlPath, jsonlContent, 'utf-8');
     console.log(`✓ Saved ${chunks.length} chunks to ${jsonlPath}`);
 
+    // Save a table manifest for citation + tooling.
+    const tablesManifestPath = join(this.outputDir, 'tables_manifest.json');
+    await writeFile(tablesManifestPath, JSON.stringify(tables, null, 2), 'utf-8');
+    console.log(`✓ Saved ${tables.length} tables to ${tablesManifestPath}`);
+
     // Create Mastra-ready format
     const mastraFormat = {
-      source: 'Figma S-1 Filing',
+      source: this.sourceUrl ? `${this.filingId} S-1 Filing (${this.sourceUrl})` : `${this.filingId} S-1 Filing`,
       processing_date: new Date().toISOString(),
       statistics: {
         total_chunks: chunks.length,
-        total_tables: (await this.getTableCount()),
+        total_tables: tables.length,
         sections: [...new Set(chunks.map(c => c.metadata.section_path[0]).filter(Boolean))].length
       },
       chunks: chunks
@@ -446,13 +509,52 @@ export class S1Processor {
     console.log(`✓ Created Mastra import file at ${mastraPath}`);
   }
 
-  private async getTableCount(): Promise<number> {
-    try {
-      const { readdir } = await import('fs/promises');
-      const files = await readdir(join(this.outputDir, 'tables'));
-      return files.filter(f => f.endsWith('.csv')).length;
-    } catch {
-      return 0;
-    }
+  private formatTableChunkContent(
+    tableNumber: number,
+    tableDescription: string,
+    sectionContext: string,
+    tableData: TableData
+  ): string {
+    const header = [
+      `# TABLE ${tableNumber}`,
+      `Description: ${tableDescription}`,
+      `Section: ${sectionContext || 'Unknown'}`,
+      tableData.caption ? `Caption: ${tableData.caption}` : undefined,
+      tableData.anchor ? `Anchor: ${tableData.anchor}` : undefined,
+      tableData.source_url ? `Source: ${tableData.source_url}` : undefined,
+      `Dimensions: ${tableData.rows} rows x ${tableData.cols} cols`,
+      `File: ${tableData.filename}`,
+      '',
+      'Preview (tabular):',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const maxRows = 40;
+    const slice = tableData.data.slice(0, maxRows);
+    const safeCell = (cell: string): string =>
+      (cell || '')
+        .replace(/\|/g, '/') // avoid breaking markdown tables
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const rows = slice.map(r => r.map(safeCell));
+    const cols = rows.reduce((m, r) => Math.max(m, r.length), 0);
+    const padded = rows.map(r => (r.length === cols ? r : [...r, ...Array(cols - r.length).fill('')]));
+
+    const markdownTable =
+      padded.length > 0
+        ? [
+            `| ${padded[0].join(' | ')} |`,
+            `| ${Array(cols).fill('---').join(' | ')} |`,
+            ...padded.slice(1).map(r => `| ${r.join(' | ')} |`),
+          ].join('\n')
+        : '(empty table)';
+
+    const truncatedNote = tableData.data.length > maxRows
+      ? `\n\n[Truncated: showing first ${maxRows} of ${tableData.data.length} rows]`
+      : '';
+
+    return `${header}\n${markdownTable}${truncatedNote}`;
   }
 }

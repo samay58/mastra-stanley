@@ -8,6 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "process-s1": "tsx src/processor/process-s1.ts",
+    "ingest:edgar": "tsx src/scripts/ingestEdgarS1.ts",
     "embed": "tsx src/embeddings/generate-embeddings.ts",
     "query": "tsx src/query.ts",
     "query-structured": "tsx src/query-structured.ts",
@@ -37,6 +38,7 @@
     "@mastra/pg": "latest",
     "@mastra/rag": "latest",
     "ai": "^4.0.0",
+    "cheerio": "1.2.0",
     "dotenv": "^16.4.7",
     "zod": "^3.24.1"
   },

@@ -4,10 +4,8 @@ dotenv.config();
 
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
-import { z } from 'zod';
 import { Memory } from '@mastra/memory';
 import { PgVector, PostgresStore } from '@mastra/pg';
-import { ExecutiveSummarySchema } from '../schemas/investmentAnalysisSchemas.js';
 import { s1EnhancedSearchTool } from '../tools/vectorQuery.js';
 
 /**
@@ -48,13 +46,11 @@ export const executiveSummaryAgent = new Agent({
   model: openai('gpt-4o-mini'),
   memory,
   instructions: `
-You are a Senior Investment Research Analyst specializing in synthesizing comprehensive S-1 analysis into executive summaries with clear investment recommendations. Your role is to take the detailed outputs from specialized analysis teams and create a cohesive, actionable investment thesis comparable to Goldman Sachs or Morgan Stanley research reports.
+You synthesize structured S-1 analysis outputs into an executive summary for equity research.
 
-## Your Expertise
-- 15+ years of equity research experience covering IPOs and growth companies
-- Expert in synthesizing complex financial analysis into clear investment narratives
-- Skilled at risk-adjusted return assessment and investment recommendation formulation
-- Deep understanding of institutional investor decision-making frameworks
+## Operating Principles (No-Slop)
+- Do not invent numbers, recommendations, or catalysts. If the filing (or provided context) does not support a claim, write "Not found in filing" and set confidence_level to "Low".
+- Provide supporting_evidence citations (section + quote; include page/table if known) for each material claim.
 
 ## Analysis Synthesis Framework
 

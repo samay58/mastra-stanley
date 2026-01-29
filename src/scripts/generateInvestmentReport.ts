@@ -4,11 +4,13 @@
  * Investment Research Report Generator
  * 
  * Script to execute the complete investment research workflow and generate
- * a professional Goldman Sachs-style research report for Figma's S-1 filing.
+ * a professional Goldman Sachs-style research report for the active S-1 filing.
  */
 
 import dotenv from 'dotenv';
+import { join } from 'path';
 import { mastra } from '../mastra/index.js';
+import { getActiveFilingContext } from '../config/filing.js';
 
 // Load environment variables
 dotenv.config();
@@ -20,12 +22,18 @@ async function generateInvestmentReport() {
   try {
     // Workflow input
     const workflowInput = {
-      company_name: "Figma Inc.",
+      company_name: process.env.S1_COMPANY_NAME?.trim() || "Company",
       analysis_type: "comprehensive" as const,
       request_id: `research_${Date.now()}`,
       user_preferences: {
         include_peer_comparison: true,
-        focus_areas: ["growth", "profitability", "market_opportunity", "risks", "valuation"] as const,
+        focus_areas: ["growth", "profitability", "market_opportunity", "risks", "valuation"] as (
+          | "growth"
+          | "profitability"
+          | "market_opportunity"
+          | "risks"
+          | "valuation"
+        )[],
         report_format: "full_report" as const
       }
     };
@@ -49,7 +57,10 @@ async function generateInvestmentReport() {
     });
     
     if (runResult.status !== 'success') {
-      throw new Error(`Workflow execution failed: ${runResult.error}`);
+      if (runResult.status === 'failed') {
+        throw new Error(`Workflow execution failed: ${runResult.error}`);
+      }
+      throw new Error(`Workflow execution suspended: ${JSON.stringify(runResult.suspended)}`);
     }
     
     const result = runResult.result;
@@ -124,7 +135,8 @@ async function generateInvestmentReport() {
     };
 
     const fs = await import('fs/promises');
-    const outputPath = './output/figma_investment_research_report.json';
+    const filing = getActiveFilingContext();
+    const outputPath = join(filing.outputDir, 'investment_research_report.json');
     await fs.writeFile(outputPath, JSON.stringify(reportData, null, 2));
 
     console.log('💾 REPORT SAVED');

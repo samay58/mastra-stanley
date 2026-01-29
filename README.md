@@ -7,14 +7,28 @@ A small TypeScript toolkit that processes and queries S-1 filings, and can gener
 ```bash
 npm install
 cp .env.example .env
-# Fill in .env: OPENAI_API_KEY, POSTGRES_CONNECTION_STRING
+# Fill in .env: OPENAI_API_KEY, POSTGRES_CONNECTION_STRING, SEC_USER_AGENT
 
 # Prepare data (embeddings) then try a query
+npm run process-s1   # uses ./figmas1_content_list.json by default (fixture)
 npm run embed
-npm run query "What is Figma's 2024 revenue?"
+npm run query "What is the IPO price range?"
 
-# Full report (takes ~15–20 minutes)
+# Full report (multi-step; runtime depends on model + retrieval)
 npm run generate-report
+```
+
+## Ingest a real S-1 from EDGAR (HTML)
+```bash
+# Example formats:
+#   --cik 0001234567
+#   --accession 0001234567-26-000001
+# Use real values from EDGAR.
+npm run ingest:edgar -- --cik <CIK> --accession <ACCESSION> --filing-id my-s1
+
+# Then set S1_FILING_ID=my-s1 (in your shell or .env) and run:
+npm run embed
+npm run query "What is the IPO price range?"
 ```
 
 ## Options and examples
@@ -36,7 +50,9 @@ npx mastra dev  # http://localhost:4111
 
 ## How it works
 
-Document chunks and tables are indexed with pgvector. An agentic workflow uses retrieval results to answer queries or generate a report. Results are saved to `output/`.
+Document chunks and tables are indexed with pgvector. An agentic workflow uses retrieval results to answer queries or generate a report.
+
+Per-filing artifacts are saved to `output/filings/<filingId>/`.
 
 ## Sessions
 

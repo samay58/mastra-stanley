@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 // Load environment variables FIRST
 dotenv.config();
 
-import { mastra, s1QueryAgent, s1QueryWorkflow } from './mastra/index.js';
+import { mastra, s1QueryAgent } from './mastra/index.js';
 
 async function queryS1(question: string, useWorkflow: boolean = false) {
   console.log('\n=== S-1 Query Interface ===\n');
@@ -26,11 +26,20 @@ async function queryS1(question: string, useWorkflow: boolean = false) {
         console.log('Answer:', result.result.answer);
         console.log('\nCitations:');
         result.result.citations.forEach(citation => {
-          console.log(`- ${citation.section} ${citation.pageNumber ? `(Page ${citation.pageNumber})` : ''} [${citation.type}]`);
+          const source = citation.source_url
+            ? citation.anchor
+              ? `${citation.source_url}#${citation.anchor}`
+              : citation.source_url
+            : undefined;
+          console.log(
+            `- ${citation.section} ${citation.pageNumber ? `(Page ${citation.pageNumber})` : ''} [${citation.type}]${source ? ` ${source}` : ''}`
+          );
         });
         console.log(`\nConfidence: ${result.result.confidence}`);
-      } else {
+      } else if (result.status === 'failed') {
         console.error('Workflow failed:', result.error);
+      } else {
+        console.error('Workflow suspended:', result.suspended);
       }
     } else {
       // Use agent directly for simple queries
@@ -59,7 +68,7 @@ async function runExamples() {
   }
 
   // Example 1: Simple financial query
-  await queryS1("What is Figma's IPO price range?");
+  await queryS1('What is the IPO price range?');
   
   console.log('\n' + '='.repeat(50) + '\n');
   
@@ -69,7 +78,7 @@ async function runExamples() {
   console.log('\n' + '='.repeat(50) + '\n');
   
   // Example 3: Financial metrics
-  await queryS1("What were Figma's revenues and key business metrics?");
+  await queryS1('What were the company\'s revenues and key business metrics?');
 }
 
 // Command line interface

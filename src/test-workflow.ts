@@ -15,12 +15,18 @@ async function testWorkflow() {
   try {
     // Create a simple test input
     const testInput = {
-      company_name: "Figma",
+      company_name: process.env.S1_COMPANY_NAME?.trim() || "Company",
       analysis_type: "comprehensive" as const,
       request_id: "test_run_001",
       user_preferences: {
         include_peer_comparison: true,
-        focus_areas: ["growth", "profitability", "market_opportunity"] as const,
+        focus_areas: ["growth", "profitability", "market_opportunity"] as (
+          | "growth"
+          | "profitability"
+          | "market_opportunity"
+          | "risks"
+          | "valuation"
+        )[],
         report_format: "full_report" as const
       }
     };
@@ -36,7 +42,10 @@ async function testWorkflow() {
     });
     
     if (runResult.status !== 'success') {
-      throw new Error(`Workflow execution failed: ${runResult.error}`);
+      if (runResult.status === 'failed') {
+        throw new Error(`Workflow execution failed: ${runResult.error}`);
+      }
+      throw new Error(`Workflow execution suspended: ${JSON.stringify(runResult.suspended)}`);
     }
     
     const result = runResult.result;

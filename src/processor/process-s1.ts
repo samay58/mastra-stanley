@@ -1,20 +1,26 @@
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 import { S1Processor } from './S1Processor.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { getActiveFilingContext } from '../config/filing.js';
 
 async function main() {
   console.log('Starting S-1 document processing...\n');
 
+  const filing = getActiveFilingContext();
+  const contentListPath = process.env.S1_CONTENT_LIST_PATH
+    ? join(process.cwd(), process.env.S1_CONTENT_LIST_PATH)
+    : join(process.cwd(), 'figmas1_content_list.json');
+
   const processor = new S1Processor(
-    join(__dirname, '../../figmas1_content_list.json'),
-    join(__dirname, '../../output'),
+    contentListPath,
+    filing.outputDir,
     {
-      chunkSize: 512,
-      chunkOverlap: 50,
+      chunkSize: process.env.S1_CHUNK_SIZE ? Number(process.env.S1_CHUNK_SIZE) : 1800,
+      chunkOverlap: process.env.S1_CHUNK_OVERLAP ? Number(process.env.S1_CHUNK_OVERLAP) : 300,
       extractMetadata: true
+    },
+    {
+      filingId: filing.filingId,
+      sourceUrl: process.env.S1_SOURCE_URL
     }
   );
 
@@ -23,7 +29,7 @@ async function main() {
     const { chunks, tables } = await processor.processDocument();
     
     // Save outputs
-    await processor.saveOutputs(chunks);
+    await processor.saveOutputs(chunks, tables);
     
     // Print summary
     console.log('\n=== Processing Complete! ===');

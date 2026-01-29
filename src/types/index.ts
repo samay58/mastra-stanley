@@ -5,6 +5,8 @@ export const ContentElementSchema = z.object({
   type: z.enum(['text', 'table', 'image']),
   text: z.string().optional(),
   text_level: z.number().optional(),
+  anchor: z.string().optional(),
+  source_url: z.string().optional(),
   img_path: z.string().optional(),
   table_caption: z.array(z.string()).optional(),
   table_footnote: z.array(z.string()).optional(),
@@ -17,10 +19,13 @@ export type ContentElement = z.infer<typeof ContentElementSchema>;
 // Chunk Types
 export const ChunkMetadataSchema = z.object({
   id: z.string(),
+  filing_id: z.string().optional(),
   text: z.string(),
   section_path: z.array(z.string()),
   section_hierarchy: z.string(),
   page_idx: z.number(),
+  anchor: z.string().optional(),
+  source_url: z.string().optional(),
   chunk_type: z.enum(['text', 'table_reference']),
   chunk_size: z.number(),
   timestamp: z.string()
@@ -40,6 +45,9 @@ export type Chunk = z.infer<typeof ChunkSchema>;
 export interface TableData {
   filename: string;
   section: string;
+  anchor?: string;
+  caption?: string;
+  source_url?: string;
   rows: number;
   cols: number;
   data: any[][];

@@ -4,6 +4,9 @@ import { embed } from 'ai';
 import { BM25Scorer, createBM25Index, combineScores } from './bm25.js';
 import { queryExpander } from './queryExpander.js';
 import { Chunk } from '../types/index.js';
+import { getActiveFilingContext } from '../config/filing.js';
+
+const VECTOR_INDEX = process.env.S1_VECTOR_INDEX?.trim() || 's1_embeddings';
 
 interface HybridSearchResult {
   chunk: Chunk;
@@ -162,18 +165,25 @@ export class HybridSearcher {
     topK: number,
     filter?: any
   ): Promise<Array<{ id: string; score: number; metadata: any }>> {
+    const filing = getActiveFilingContext();
+
     // Generate embedding for query
     const { embedding } = await embed({
       model: openai.embedding('text-embedding-3-small'),
       value: query
     });
     
+    const mergedFilter = {
+      ...(filter || {}),
+      filing_id: filing.filingId
+    };
+
     // Search vector store
     const results = await this.vectorStore.query({
-      indexName: 's1_embeddings',
+      indexName: VECTOR_INDEX,
       queryVector: embedding,
       topK,
-      filter
+      filter: mergedFilter
     });
     
     return results.map(r => ({
@@ -275,13 +285,8 @@ export class HybridSearcher {
    * Get the path to chunks file with validation
    */
   private async getChunksPath(): Promise<string> {
-    const { join, dirname } = await import('path');
-    const { fileURLToPath } = await import('url');
     const { access } = await import('fs/promises');
-    
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const chunksPath = join(__dirname, '../../output/text_chunks.jsonl');
+    const chunksPath = getActiveFilingContext().chunksPath;
     
     try {
       await access(chunksPath);

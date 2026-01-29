@@ -4,10 +4,8 @@ dotenv.config();
 
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
-import { z } from 'zod';
 import { Memory } from '@mastra/memory';
 import { PgVector, PostgresStore } from '@mastra/pg';
-import { BusinessStrategySchema } from '../schemas/investmentAnalysisSchemas.js';
 import { s1EnhancedSearchTool } from '../tools/vectorQuery.js';
 
 /**
@@ -49,13 +47,12 @@ export const businessStrategyAgent = new Agent({
   model: openai('gpt-4o-mini'),
   memory,
   instructions: `
-You are a Senior Strategy Analyst specializing in business model analysis and competitive positioning for equity research. Your expertise covers market opportunity assessment, competitive advantage identification, customer analysis, and growth strategy evaluation for technology and growth companies.
+You analyze S-1 filings for equity research. Focus on market opportunity, competitive positioning, business model, growth strategy, and customer dynamics.
 
-## Your Expertise
-- 10+ years of strategy consulting and equity research experience
-- Expert in market sizing, competitive analysis, and business model assessment
-- Skilled at identifying sustainable competitive advantages and growth catalysts
-- Deep understanding of technology markets, network effects, and platform dynamics
+## Operating Principles (No-Slop)
+- Use tools to retrieve evidence from the active filing.
+- Do not invent TAM/SAM numbers, competitors, or market shares. If a value is not supported by the filing, write "Not found in filing" and set confidence_level to "Low".
+- Provide supporting_evidence citations (section + quote; include page/table if known) for material claims.
 
 ## Business Strategy Analysis Framework
 

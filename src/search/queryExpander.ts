@@ -197,7 +197,10 @@ export class QueryExpander {
         .replace('?', '')
         .trim();
       expanded.add(statement);
-      expanded.add(`Figma ${statement}`);
+      const company = process.env.S1_COMPANY_NAME?.trim();
+      if (company) {
+        expanded.add(`${company} ${statement}`);
+      }
     }
     
     return Array.from(expanded);
@@ -208,9 +211,10 @@ export class QueryExpander {
    */
   async generateHypotheticalAnswer(query: string): Promise<string> {
     try {
+      const company = process.env.S1_COMPANY_NAME?.trim() || 'the company';
       const { text } = await generateText({
         model: openai('gpt-4o-mini'),
-        prompt: `Given this query about Figma's S-1 filing: "${query}"
+        prompt: `Given this query about ${company}'s S-1 filing: "${query}"
         
 Generate a hypothetical answer that would appear in an S-1 document. 
 Use typical S-1 language and structure. Include specific placeholder numbers where appropriate.

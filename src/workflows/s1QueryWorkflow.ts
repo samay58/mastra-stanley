@@ -1,7 +1,7 @@
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { s1QueryAgent } from '../agents/s1QueryAgent.js';
-import { openai } from '@ai-sdk/openai';
+import { s1SearchWithRerankTool, s1TableLookupTool } from '../tools/vectorQuery.js';
 
 // Step 1: Analyze the query to determine what information is needed
 const analyzeQueryStep = createStep({
@@ -18,32 +18,67 @@ const analyzeQueryStep = createStep({
   }),
   execute: async ({ inputData }) => {
     const { query } = inputData;
-    
-    // Use GPT to analyze the query
-    const prompt = `Analyze this S-1 document query and extract:
-1. Query type (financial/risk/business/management/general)
-2. Key search terms
-3. Whether financial tables are needed
-4. Relevant S-1 sections to search
 
-Query: "${query}"
+    const q = query.trim();
+    const lower = q.toLowerCase();
+    const containsAny = (terms: string[]) => terms.some(t => lower.includes(t));
 
-Respond in JSON format.`;
+    const isRisk = containsAny(['risk', 'risk factor', 'factor', 'litigation', 'regulatory', 'compliance']);
+    const isFinancial = containsAny([
+      'revenue',
+      'income',
+      'earnings',
+      'gross margin',
+      'operating margin',
+      'cash flow',
+      'balance sheet',
+      'statement of operations',
+      'gaap',
+      'ebitda',
+      'net loss',
+      'profit',
+      'cost of revenue',
+    ]);
+    const isManagement = containsAny(['management', 'executive', 'ceo', 'cfo', 'compensation', 'director', 'officer']);
+    const isBusiness = containsAny(['business', 'strategy', 'competition', 'competitive', 'market', 'customers', 'product']);
 
-    const response = await openai('gpt-4o-mini').doGenerate({
-      inputFormat: 'messages',
-      mode: { type: 'regular' },
-      prompt: [{ role: 'user', content: prompt }],
-      output: 'object'
-    });
+    const queryType = ((): 'financial' | 'risk' | 'business' | 'management' | 'general' => {
+      if (isFinancial) return 'financial';
+      if (isRisk) return 'risk';
+      if (isManagement) return 'management';
+      if (isBusiness) return 'business';
+      return 'general';
+    })();
 
-    const analysis = response.object as any;
-    
+    const needsTables =
+      queryType === 'financial' || /\$|\b\d{4}\b|%|\bshares?\b/i.test(q);
+
+    const sections = ((): string[] => {
+      switch (queryType) {
+        case 'risk':
+          return ['RISK FACTORS'];
+        case 'financial':
+          return ["MANAGEMENT'S DISCUSSION AND ANALYSIS", 'FINANCIAL STATEMENTS', 'RESULTS OF OPERATIONS'];
+        case 'management':
+          return ['MANAGEMENT', 'EXECUTIVE COMPENSATION'];
+        case 'business':
+          return ['BUSINESS'];
+        default:
+          return [];
+      }
+    })();
+
+    const searchTerms = new Set<string>([q]);
+    if (queryType === 'risk' && !lower.includes('risk')) searchTerms.add(`risk factors ${q}`);
+    if (queryType === 'financial' && !containsAny(['financial', 'statements', 'operations'])) {
+      searchTerms.add(`financial statements ${q}`);
+    }
+
     return {
-      queryType: analysis.queryType || 'general',
-      searchTerms: analysis.searchTerms || [query],
-      needsTables: analysis.needsTables || false,
-      sections: analysis.sections || []
+      queryType,
+      searchTerms: Array.from(searchTerms),
+      needsTables,
+      sections,
     };
   }
 });
@@ -67,24 +102,27 @@ const searchStep = createStep({
     })),
     tableResults: z.array(z.object({
       filename: z.string(),
+      path: z.string(),
       section: z.string(),
-      description: z.string()
+      description: z.string(),
+      caption: z.string().optional(),
+      anchor: z.string().optional(),
+      source_url: z.string().optional()
     }))
   }),
-  execute: async ({ inputData }) => {
-    const { searchTerms, needsTables, sections, originalQuery } = inputData;
+  execute: async ({ inputData, runtimeContext }) => {
+    const { searchTerms, needsTables, sections } = inputData;
     
     // Perform text search with re-ranking
     const searchPromises = searchTerms.map(term => 
-      s1QueryAgent.tools.searchS1WithRerank.execute({
+      s1SearchWithRerankTool.execute({
         context: {
           query: term,
           topK: 10,
           rerankTopK: 5,
           filter: sections.length > 0 ? { section_path: sections[0] } : undefined
         },
-        mastra: undefined as any,
-        runtimeContext: undefined as any
+        runtimeContext
       })
     );
     
@@ -99,12 +137,11 @@ const searchStep = createStep({
     // Search for tables if needed
     let tableResults: any[] = [];
     if (needsTables) {
-      const tableSearch = await s1QueryAgent.tools.lookupS1Table.execute({
+      const tableSearch = await s1TableLookupTool.execute({
         context: {
           keyword: searchTerms[0]
         },
-        mastra: undefined as any,
-        runtimeContext: undefined as any
+        runtimeContext
       });
       tableResults = tableSearch.tables;
     }
@@ -129,8 +166,12 @@ const generateAnswerStep = createStep({
     })),
     tableResults: z.array(z.object({
       filename: z.string(),
+      path: z.string(),
       section: z.string(),
-      description: z.string()
+      description: z.string(),
+      caption: z.string().optional(),
+      anchor: z.string().optional(),
+      source_url: z.string().optional()
     }))
   }),
   outputSchema: z.object({
@@ -138,7 +179,11 @@ const generateAnswerStep = createStep({
     citations: z.array(z.object({
       section: z.string(),
       pageNumber: z.number().optional(),
-      type: z.enum(['text', 'table'])
+      type: z.enum(['text', 'table']),
+      chunkId: z.string().optional(),
+      tableFilename: z.string().optional(),
+      source_url: z.string().optional(),
+      anchor: z.string().optional()
     })),
     confidence: z.enum(['high', 'medium', 'low'])
   }),
@@ -169,22 +214,39 @@ const generateAnswerStep = createStep({
     ]);
     
     // Extract citations from the response
-    const citations = textResults.map(r => ({
-      section: r.metadata.section_hierarchy || 'Unknown',
-      pageNumber: r.metadata.page_idx,
-      type: 'text' as const
-    })).concat(tableResults.map(t => ({
-      section: t.section,
-      pageNumber: undefined,
-      type: 'table' as const
-    })));
+    const citations: Array<{
+      section: string;
+      pageNumber?: number;
+      type: 'text' | 'table';
+      chunkId?: string;
+      tableFilename?: string;
+      source_url?: string;
+      anchor?: string;
+    }> = [
+      ...textResults.map(r => ({
+        section: r.metadata.section_hierarchy || 'Unknown',
+        pageNumber: r.metadata.page_idx,
+        type: 'text' as const,
+        chunkId: r.metadata.id,
+        source_url: r.metadata.source_url,
+        anchor: r.metadata.anchor,
+      })),
+      ...tableResults.map(t => ({
+        section: t.section,
+        type: 'table' as const,
+        tableFilename: t.filename,
+        source_url: t.source_url,
+        anchor: t.anchor,
+      })),
+    ];
     
     // Determine confidence based on result quality
-    const confidence = textResults.length > 3 && textResults[0].score > 0.8 
-      ? 'high' 
-      : textResults.length > 0 
-        ? 'medium' 
-        : 'low';
+    const confidence: 'high' | 'medium' | 'low' =
+      textResults.length > 3 && textResults[0].score > 0.8
+        ? 'high'
+        : textResults.length > 0
+          ? 'medium'
+          : 'low';
     
     return {
       answer: response.text,
@@ -208,18 +270,22 @@ export const s1QueryWorkflow = createWorkflow({
     citations: z.array(z.object({
       section: z.string(),
       pageNumber: z.number().optional(),
-      type: z.enum(['text', 'table'])
+      type: z.enum(['text', 'table']),
+      chunkId: z.string().optional(),
+      tableFilename: z.string().optional(),
+      source_url: z.string().optional(),
+      anchor: z.string().optional()
     })),
     confidence: z.enum(['high', 'medium', 'low'])
   })
 })
   .then(analyzeQueryStep)
-  .map(({ inputData, getInitData }) => ({
+  .map(async ({ inputData, getInitData }) => ({
     ...inputData,
     originalQuery: getInitData().query
   }))
   .then(searchStep)
-  .map(({ inputData, getInitData }) => ({
+  .map(async ({ inputData, getInitData }) => ({
     ...inputData,
     originalQuery: getInitData().query
   }))

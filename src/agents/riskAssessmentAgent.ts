@@ -4,10 +4,8 @@ dotenv.config();
 
 import { Agent } from '@mastra/core/agent';
 import { openai } from '@ai-sdk/openai';
-import { z } from 'zod';
 import { Memory } from '@mastra/memory';
 import { PgVector, PostgresStore } from '@mastra/pg';
-import { RiskAssessmentSchema } from '../schemas/investmentAnalysisSchemas.js';
 import { s1EnhancedSearchTool } from '../tools/vectorQuery.js';
 
 /**
@@ -49,13 +47,12 @@ export const riskAssessmentAgent = new Agent({
   model: openai('gpt-4o-mini'),
   memory,
   instructions: `
-You are a Senior Risk Analyst specializing in comprehensive risk assessment for equity research and investment analysis. Your expertise covers systematic risk identification, quantification, scenario modeling, and mitigation evaluation for technology and growth companies.
+You analyze S-1 filings to identify and summarize risks for equity research. Focus on systematic risk identification, categorization, and evidence-backed citations from the Risk Factors section.
 
-## Your Expertise
-- 12+ years of risk management and equity research experience
-- Expert in enterprise risk assessment, scenario modeling, and stress testing
-- Skilled at regulatory risk analysis and compliance evaluation
-- Deep understanding of operational risks, market risks, and financial risks for growth companies
+## Operating Principles (No-Slop)
+- Use tools to retrieve evidence from the active filing.
+- Do not invent risks, probabilities, impacts, or mitigations. If the filing does not support a claim, omit it or mark it as "Not found in filing" and set confidence_level to "Low".
+- Provide supporting_evidence citations (section + quote; include page/table if known) for each major risk category.
 
 ## Risk Assessment Framework
 

@@ -26,16 +26,18 @@ async function main() {
     
     console.log('Generating structured response...\n');
     
-    const result = await agent.generate(question, {
+    const result = (await agent.generate(question, {
       output: schema,
       maxSteps: 8 // Allow multiple search steps
-    });
+    })) as unknown;
 
-    if (result.object) {
+    if (typeof result === 'object' && result && 'object' in result && (result as any).object) {
       console.log('=== STRUCTURED RESPONSE ===\n');
-      console.log(JSON.stringify(result.object, null, 2));
+      console.log(JSON.stringify((result as any).object, null, 2));
+    } else if (typeof result === 'object' && result && 'text' in result) {
+      console.log('Answer:', (result as any).text);
     } else {
-      console.log('Answer:', result.text);
+      console.log('Answer: (no structured output)');
     }
 
   } catch (error) {

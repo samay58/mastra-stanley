@@ -15,11 +15,6 @@ import {
 } from '../agents/index.js';
 import { s1QueryWorkflow, s1SimpleWorkflow } from '../workflows/s1QueryWorkflow.js';
 import { investmentResearchWorkflow } from '../workflows/investmentResearchWorkflow.js';
-import { 
-  s1VectorQueryTool, 
-  s1SearchWithRerankTool, 
-  s1TableLookupTool 
-} from '../tools/vectorQuery.js';
 
 // Initialize Mastra instance
 export const mastra = new Mastra({

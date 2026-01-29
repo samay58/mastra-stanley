@@ -7,12 +7,32 @@ import { z } from 'zod';
 import { openai } from '@ai-sdk/openai';
 import { embed } from 'ai';
 import { PgVector } from '@mastra/pg';
-import { rerank } from '@mastra/rag';
+import type { QueryResult } from '@mastra/core/vector';
+import { getActiveFilingContext } from '../config/filing.js';
+
+const VECTOR_INDEX = process.env.S1_VECTOR_INDEX?.trim() || 's1_embeddings';
+
+function toResultText(result: QueryResult): string {
+  const metadataText = result.metadata?.text;
+  if (typeof metadataText === 'string' && metadataText.trim().length > 0) {
+    return metadataText;
+  }
+  return result.document || '';
+}
+
+function toToolResult(result: QueryResult): { text: string; score: number; metadata: Record<string, any> } {
+  const metadata = result.metadata ?? {};
+  return {
+    text: toResultText(result),
+    score: result.score,
+    metadata,
+  };
+}
 
 // Create the basic vector query tool
 export const s1VectorQueryTool = createTool({
   id: 'searchS1Document',
-  description: 'Search through the Figma S-1 filing document to find relevant information about the company, financials, risks, and other IPO-related data',
+  description: 'Search through the active S-1 filing document to find relevant information about the company, financials, risks, and other IPO-related data',
   inputSchema: z.object({
     query: z.string().describe('The search query'),
     topK: z.number().default(5).describe('Number of results to return')
@@ -26,6 +46,7 @@ export const s1VectorQueryTool = createTool({
   }),
   execute: async ({ context }) => {
     const { query, topK } = context;
+    const filing = getActiveFilingContext();
     
     // Initialize vector store
     const vectorStore = new PgVector({
@@ -40,12 +61,13 @@ export const s1VectorQueryTool = createTool({
     
     // Search vector store
     const results = await vectorStore.query({
-      indexName: 's1_embeddings',
+      indexName: VECTOR_INDEX,
       queryVector: embedding,
-      topK
+      topK,
+      filter: { filing_id: filing.filingId }
     });
     
-    return { results };
+    return { results: results.map(toToolResult) };
   }
 });
 
@@ -71,6 +93,7 @@ export const s1SearchWithRerankTool = createTool({
   }),
   execute: async ({ context }) => {
     const { query, topK, rerankTopK, filter } = context;
+    const filing = getActiveFilingContext();
     
     // Initialize vector store
     const vectorStore = new PgVector({
@@ -85,15 +108,17 @@ export const s1SearchWithRerankTool = createTool({
     
     // Search vector store
     const initialResults = await vectorStore.query({
-      indexName: 's1_embeddings',
+      indexName: VECTOR_INDEX,
       queryVector: embedding,
       topK,
-      filter
+      filter: { ...(filter || {}), filing_id: filing.filingId }
     });
     
+    const toolResults = initialResults.map(toToolResult);
+
     // Enhanced result processing without external reranking
     // Sort by similarity score and apply relevance filtering
-    const sortedResults = initialResults
+    const sortedResults = toolResults
       .sort((a, b) => b.score - a.score)
       .filter(result => result.score > 0.5); // Filter low-relevance results
     
@@ -232,7 +257,7 @@ function cleanFinancialValue(value: string): string {
     .replace(/[^\d\-\.\s%]/g, '') // Keep only numbers, minus, decimal, space, %
     .trim();
   
-  // Handle concatenated values (e.g., "504874 749.011" -> "749.011")
+  // Handle concatenated values sometimes produced by messy extractions (e.g., two numbers stuck together).
   if (cleaned.includes(' ') && !cleaned.includes('%')) {
     const parts = cleaned.split(' ').filter(part => part.trim());
     if (parts.length > 1) {
@@ -246,14 +271,14 @@ function cleanFinancialValue(value: string): string {
 }
 
 // Helper function to parse CSV content with enhanced year detection
-async function parseCSVContent(content: string): Promise<any[]> {
+async function parseCSVContent(content: string): Promise<string[][]> {
   const lines = content.split('\n').filter(line => line.trim());
   if (lines.length === 0) return [];
   
-  const rows = [];
+  const rows: string[][] = [];
   for (const line of lines) {
     // Enhanced CSV parsing - handles complex cases with embedded commas and quotes
-    const cells = [];
+    const cells: string[] = [];
     let currentCell = '';
     let inQuotes = false;
     let i = 0;
@@ -289,7 +314,7 @@ async function parseCSVContent(content: string): Promise<any[]> {
 }
 
 // Helper function to detect year columns with enhanced logic
-function detectYearHeaders(rows: any[]): { yearColumns: number[], yearLabels: string[] } {
+function detectYearHeaders(rows: string[][]): { yearColumns: number[]; yearLabels: string[] } {
   const yearColumns: number[] = [];
   const yearLabels: string[] = [];
   
@@ -320,47 +345,15 @@ function detectYearHeaders(rows: any[]): { yearColumns: number[], yearLabels: st
     return { yearColumns, yearLabels };
   }
   
-  // Fallback: use known financial data patterns to infer years
+  // Fallback: do not guess years/periods when they are not explicit.
   return inferYearColumnsFromData(rows);
 }
 
-// Helper function to infer year columns from known data patterns
-function inferYearColumnsFromData(rows: any[]): { yearColumns: number[], yearLabels: string[] } {
-  const yearColumns: number[] = [];
-  const yearLabels: string[] = [];
-  
-  // Look for revenue rows and known values
-  for (const row of rows) {
-    if (row.length > 0 && row[0] && row[0].toLowerCase().includes('revenue')) {
-      // Check for known revenue values that can help identify years
-      for (let colIndex = 1; colIndex < row.length; colIndex++) {
-        const value = cleanFinancialValue(row[colIndex]);
-        
-        // Known 2024 revenue is around $749 million
-        if (value.includes('749') && value.includes('011')) {
-          yearColumns.push(colIndex);
-          yearLabels.push('2024');
-        }
-        // Known 2023 revenue is around $504 million  
-        else if (value.includes('504') && value.includes('874')) {
-          yearColumns.push(colIndex);
-          yearLabels.push('2023');
-        }
-      }
-    }
-  }
-  
-  // If we still don't have year mappings, create reasonable defaults
-  if (yearColumns.length === 0 && rows.length > 0 && rows[0].length > 1) {
-    // Assume most recent years in reverse chronological order
-    const currentYear = new Date().getFullYear();
-    for (let i = 1; i < Math.min(rows[0].length, 5); i++) {
-      yearColumns.push(i);
-      yearLabels.push(String(currentYear - (i - 1)));
-    }
-  }
-  
-  return { yearColumns, yearLabels };
+// Helper function to avoid guessing year/period columns.
+function inferYearColumnsFromData(_rows: string[][]): { yearColumns: number[]; yearLabels: string[] } {
+  // If we cannot detect explicit years/periods, we intentionally do not guess.
+  // Guessing creates incorrect period labels (worse than omitting them).
+  return { yearColumns: [], yearLabels: [] };
 }
 
 export const s1TableLookupTool = createTool({
@@ -376,23 +369,54 @@ export const s1TableLookupTool = createTool({
       filename: z.string(),
       path: z.string(),
       section: z.string(),
-      description: z.string()
+      description: z.string(),
+      caption: z.string().optional(),
+      anchor: z.string().optional(),
+      source_url: z.string().optional()
     }))
   }),
   execute: async ({ context }) => {
     const { tableNumber, keyword, section } = context;
     const { readdir } = await import('fs/promises');
-    const { join, dirname } = await import('path');
-    const { fileURLToPath } = await import('url');
-    
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const tablesDir = join(__dirname, '../../output/tables');
+    const { readFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const filing = getActiveFilingContext();
+    const tablesDir = filing.tablesDir;
     
     try {
-      const files = await readdir(tablesDir);
-      const csvFiles = files.filter(f => f.endsWith('.csv'));
-      
+      type ManifestEntry = {
+        filename?: string;
+        section?: string;
+        caption?: string;
+        anchor?: string;
+        source_url?: string;
+      };
+
+      let manifest: ManifestEntry[] | null = null;
+      try {
+        const raw = await readFile(filing.tablesManifestPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          manifest = parsed as ManifestEntry[];
+        }
+      } catch {
+        // Fall back to directory scanning when the manifest is missing or invalid.
+      }
+
+      const manifestByFilename = manifest
+        ? new Map(
+            manifest
+              .map(entry => [entry.filename, entry] as const)
+              .filter((pair): pair is readonly [string, ManifestEntry] => typeof pair[0] === 'string')
+          )
+        : null;
+
+      const csvFiles = manifest
+        ? manifest
+            .map(entry => entry.filename)
+            .filter((name): name is string => typeof name === 'string' && name.endsWith('.csv'))
+        : (await readdir(tablesDir)).filter(f => f.endsWith('.csv'));
+
       let matchedTables = csvFiles;
       
       // Filter by table number if provided
@@ -404,13 +428,26 @@ export const s1TableLookupTool = createTool({
       // Filter by keyword if provided
       if (keyword) {
         const lowerKeyword = keyword.toLowerCase();
-        matchedTables = matchedTables.filter(f => f.toLowerCase().includes(lowerKeyword));
+        matchedTables = matchedTables.filter(filename => {
+          if (filename.toLowerCase().includes(lowerKeyword)) return true;
+          const entry = manifestByFilename?.get(filename);
+          if (!entry) return false;
+          return (
+            (entry.caption || '').toLowerCase().includes(lowerKeyword) ||
+            (entry.section || '').toLowerCase().includes(lowerKeyword)
+          );
+        });
       }
       
       // Filter by section if provided
       if (section) {
         const lowerSection = section.toLowerCase().replace(/\s+/g, '_');
-        matchedTables = matchedTables.filter(f => f.toLowerCase().includes(lowerSection));
+        matchedTables = matchedTables.filter(filename => {
+          if (filename.toLowerCase().includes(lowerSection)) return true;
+          const entry = manifestByFilename?.get(filename);
+          if (!entry) return false;
+          return (entry.section || '').toLowerCase().includes(section.toLowerCase());
+        });
       }
       
       // Map to result format
@@ -418,12 +455,17 @@ export const s1TableLookupTool = createTool({
         const parts = filename.replace('.csv', '').split('_');
         const tableNum = parseInt(parts[1], 10);
         const sectionName = parts.slice(2).join(' ');
+
+        const manifestEntry = manifestByFilename?.get(filename);
         
         return {
           filename,
           path: join(tablesDir, filename),
-          section: sectionName || 'Unknown',
-          description: `Table ${tableNum}: ${sectionName}`
+          section: manifestEntry?.section || sectionName || 'Unknown',
+          description: `Table ${Number.isFinite(tableNum) ? tableNum : '?'}: ${sectionName || manifestEntry?.section || 'Unknown'}`,
+          caption: manifestEntry?.caption,
+          anchor: manifestEntry?.anchor,
+          source_url: manifestEntry?.source_url
         };
       });
       
@@ -464,15 +506,11 @@ export const s1TableDataTool = createTool({
   execute: async ({ context }) => {
     const { tableNumber, filename, keyword, rowFilter, cleanData } = context;
     const { readdir, readFile } = await import('fs/promises');
-    const { join, dirname } = await import('path');
-    const { fileURLToPath } = await import('url');
-    
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = dirname(__filename);
-    const tablesDir = join(__dirname, '../../output/tables');
+    const { join } = await import('path');
+    const tablesDir = getActiveFilingContext().tablesDir;
     
     try {
-      let targetFiles = [];
+      let targetFiles: string[] = [];
       
       if (filename) {
         // Specific filename provided
@@ -505,7 +543,22 @@ export const s1TableDataTool = createTool({
         targetFiles = csvFiles.slice(0, 3); // Limit to top 3 matches
       }
       
-      const tableData = [];
+      type CleanedTableRow = {
+        rowLabel: string;
+        values: string[];
+        yearData?: Record<string, string>;
+      };
+
+      type ParsedTable = {
+        tableNumber: number;
+        filename: string;
+        description: string;
+        headers?: string[];
+        rows: string[][];
+        cleanedData?: CleanedTableRow[];
+      };
+
+      const tableData: ParsedTable[] = [];
       
       for (const file of targetFiles) {
         const filePath = join(tablesDir, file);
@@ -523,14 +576,14 @@ export const s1TableDataTool = createTool({
         const description = parts.slice(2).join(' ');
         
         // Enhanced header detection with year mapping
-        let headers = [];
+        let headers: string[] = [];
         let dataStartIndex = 0;
         const { yearColumns, yearLabels } = detectYearHeaders(rows);
         
         // Build enhanced headers with year information
         if (yearColumns.length > 0) {
           // Find the row that contains period descriptions
-          let headerRow = null;
+          let headerRow: string[] | null = null;
           for (let i = 0; i < Math.min(3, rows.length); i++) {
             if (rows[i].some(cell => /year|ended|months|quarter/i.test(cell))) {
               headerRow = rows[i];
@@ -576,12 +629,12 @@ export const s1TableDataTool = createTool({
         }
         
         // Clean data if requested with year mapping
-        let cleanedData = [];
+        let cleanedData: CleanedTableRow[] = [];
         if (cleanData && filteredRows.length > 0) {
           cleanedData = filteredRows
             .filter(row => row.length > 1 && row[0].trim()) // Skip empty rows
             .map(row => {
-              const cleanedRow = {
+              const cleanedRow: CleanedTableRow = {
                 rowLabel: row[0],
                 values: row.slice(1).map(cleanFinancialValue)
               };
@@ -669,6 +722,7 @@ export const s1HybridSearchTool = createTool({
   }),
   execute: async ({ context }) => {
     const { query, topK, rerankTopK, keywordWeight } = context;
+    const filing = getActiveFilingContext();
     
     // Initialize vector store
     const vectorStore = new PgVector({
@@ -683,16 +737,19 @@ export const s1HybridSearchTool = createTool({
     
     // Perform semantic search
     const semanticResults = await vectorStore.query({
-      indexName: 's1_embeddings',
+      indexName: VECTOR_INDEX,
       queryVector: embedding,
-      topK: topK * 2 // Get more results for hybrid ranking
+      topK: topK * 2, // Get more results for hybrid ranking
+      filter: { filing_id: filing.filingId }
     });
+
+    const semanticToolResults = semanticResults.map(toToolResult);
     
     // Perform keyword matching
     const queryTerms = query.toLowerCase().split(/\s+/)
       .filter(term => term.length > 2); // Filter out very short terms
     
-    const hybridResults = semanticResults.map(result => {
+    const hybridResults = semanticToolResults.map(result => {
       const resultText = result.text?.toLowerCase() || '';
       const sectionPath = result.metadata?.section_hierarchy?.toLowerCase() || '';
       
@@ -767,7 +824,7 @@ export const s1EnhancedSearchTool = createTool({
       metadata: z.record(z.any())
     }))
   }),
-  execute: async ({ context }) => {
+  execute: async ({ context, runtimeContext }) => {
     const { query, topK, expandQuery, useHyDE, vectorWeight } = context;
     
     try {
@@ -827,7 +884,8 @@ export const s1EnhancedSearchTool = createTool({
             query, 
             topK, 
             rerankTopK: Math.min(topK, 5)
-          } 
+          },
+          runtimeContext
         });
         
         console.log(`✅ Fallback vector search successful - found ${fallbackResult.results.length} results`);
@@ -835,7 +893,10 @@ export const s1EnhancedSearchTool = createTool({
         // Add search method metadata to indicate fallback was used
         return {
           results: fallbackResult.results.map(r => ({
-            ...r,
+            text: r.text,
+            score: r.score,
+            vectorScore: r.score,
+            keywordScore: 0,
             metadata: {
               ...r.metadata,
               search_method: 'vector_fallback',
@@ -848,11 +909,14 @@ export const s1EnhancedSearchTool = createTool({
         
         // Final fallback to basic vector search
         console.log('🔄 Falling back to basic vector search...');
-        const basicResult = await s1VectorQueryTool.execute({ context: { query, topK } });
+        const basicResult = await s1VectorQueryTool.execute({ context: { query, topK }, runtimeContext });
         
         return {
           results: basicResult.results.map(r => ({
-            ...r,
+            text: r.text,
+            score: r.score,
+            vectorScore: r.score,
+            keywordScore: 0,
             metadata: {
               ...r.metadata,
               search_method: 'basic_vector_fallback',

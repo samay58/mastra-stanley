@@ -1,17 +1,13 @@
 import { readFile } from 'fs/promises';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { openai } from '@ai-sdk/openai';
 import { embedMany } from 'ai';
 import { PgVector } from '@mastra/pg';
 import dotenv from 'dotenv';
 import type { Chunk } from '../types/index.js';
+import { getActiveFilingContext } from '../config/filing.js';
 
 // Load environment variables
 dotenv.config();
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 interface EmbeddingBatch {
   chunks: Chunk[];
@@ -21,8 +17,10 @@ interface EmbeddingBatch {
 class EmbeddingGenerator {
   private vectorStore: PgVector;
   private batchSize = 50; // Process 50 chunks at a time
+  private indexName: string;
   
   constructor() {
+    this.indexName = process.env.S1_VECTOR_INDEX?.trim() || 's1_embeddings';
     // Initialize vector store
     this.vectorStore = new PgVector({
       connectionString: process.env.POSTGRES_CONNECTION_STRING!
@@ -30,9 +28,9 @@ class EmbeddingGenerator {
   }
 
   async loadChunks(): Promise<Chunk[]> {
+    const filing = getActiveFilingContext();
     console.log('Loading chunks from JSONL file...');
-    const jsonlPath = join(__dirname, '../../output/text_chunks.jsonl');
-    const content = await readFile(jsonlPath, 'utf-8');
+    const content = await readFile(filing.chunksPath, 'utf-8');
     
     const chunks: Chunk[] = content
       .split('\n')
@@ -65,18 +63,30 @@ class EmbeddingGenerator {
   }
 
   async initializeVectorStore(): Promise<void> {
+    const replace = process.env.S1_REPLACE_VECTOR_INDEX === 'true';
     console.log('Initializing vector store...');
     
     try {
-      // Create index if it doesn't exist
+      if (replace) {
+        // PgVector doesn't support "replace" natively; delete then recreate.
+        await this.vectorStore.deleteIndex({ indexName: this.indexName });
+      }
+
+      // Create index if it doesn't exist (or after delete).
       await this.vectorStore.createIndex({
-        indexName: 's1_embeddings',
+        indexName: this.indexName,
         dimension: 1536, // text-embedding-3-small dimension
-        replace: true // Replace if exists
+        metric: 'cosine'
       });
       
-      console.log('Vector store initialized');
+      console.log(`Vector store initialized (${this.indexName})`);
     } catch (error) {
+      // When not replacing, it's common for the index to already exist.
+      if (!replace && error instanceof Error && /already exists|exists/i.test(error.message)) {
+        console.log(`Vector index already exists (${this.indexName}); continuing`);
+        return;
+      }
+
       console.error('Error initializing vector store:', error);
       throw error;
     }
@@ -88,10 +98,13 @@ class EmbeddingGenerator {
     // Prepare metadata for each chunk
     const metadata = chunks.map(chunk => ({
       id: chunk.id,
+      filing_id: chunk.metadata.filing_id,
       text: chunk.content,
       section_path: chunk.metadata.section_path.join(' > '),
       section_hierarchy: chunk.metadata.section_hierarchy,
       page_idx: chunk.metadata.page_idx,
+      anchor: chunk.metadata.anchor,
+      source_url: chunk.metadata.source_url,
       chunk_type: chunk.metadata.chunk_type,
       chunk_size: chunk.metadata.chunk_size,
       timestamp: chunk.metadata.timestamp
@@ -99,7 +112,7 @@ class EmbeddingGenerator {
 
     // Upsert embeddings with metadata
     await this.vectorStore.upsert({
-      indexName: 's1_embeddings',
+      indexName: this.indexName,
       vectors: embeddings,
       metadata
     });
@@ -107,6 +120,9 @@ class EmbeddingGenerator {
 
   async processAllChunks(): Promise<void> {
     console.log('\n=== Starting Embedding Generation ===\n');
+    const filing = getActiveFilingContext();
+    console.log(`Active filing: ${filing.filingId}`);
+    console.log(`Chunks path: ${filing.chunksPath}\n`);
     
     // Load all chunks
     const chunks = await this.loadChunks();
@@ -145,7 +161,7 @@ class EmbeddingGenerator {
     
     console.log('\n=== Embedding Generation Complete! ===');
     console.log(`Total chunks processed: ${chunks.length}`);
-    console.log(`Embeddings stored in index: s1_embeddings`);
+    console.log(`Embeddings stored in index: ${this.indexName}`);
   }
 }
 
