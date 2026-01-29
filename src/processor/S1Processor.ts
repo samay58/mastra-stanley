@@ -180,8 +180,10 @@ export class S1Processor {
     // State tracking
     const allChunks: Chunk[] = [];
     const allTables: TableData[] = [];
-    let currentChunkContent: string[] = [];
-    let currentSectionPath: string[] = [];
+    let currentChunkBody: string[] = [];
+    // Default pre-major content to an explicit cover section. Real filings will reset this
+    // once we hit the first known MAJOR_HEADING.
+    let currentSectionPath: string[] = ['Cover Page'];
     let currentAnchor: string | undefined;
     let currentChunkAnchor: string | undefined;
     let chunkId = 0;
@@ -203,19 +205,20 @@ export class S1Processor {
         case 'MAJOR_HEADING':
         case 'HEADING':
           // Save previous chunk if exists
-          if (currentChunkContent.length > 0) {
+          if (currentChunkBody.length > 0) {
             const chunk = this.createChunk(
               chunkId++,
-              currentChunkContent.join('\n\n'),
+              this.composeChunkContent(currentSectionPath, currentChunkBody),
               currentSectionPath,
               elements[i - 1]?.page_idx || 0,
               currentChunkAnchor || currentAnchor,
               this.inferTextChunkType(currentSectionPath)
             );
             allChunks.push(chunk);
-            currentChunkContent = [];
-            currentChunkAnchor = undefined;
+            currentChunkBody = [];
           }
+          // We're starting a new section; do not let citation anchors bleed across headings.
+          currentChunkAnchor = undefined;
 
           // Update section path with enhanced tracking
           if (elemType === 'MAJOR_HEADING') {
@@ -243,10 +246,9 @@ export class S1Processor {
           if (elementAnchor) {
             currentAnchor = elementAnchor;
           }
-          if (!currentChunkAnchor && elementAnchor) {
+          if (elementAnchor) {
             currentChunkAnchor = elementAnchor;
           }
-          currentChunkContent.push(`# ${content}`);
           break;
 
         case 'TABLE':
@@ -266,13 +268,13 @@ export class S1Processor {
             const sectionContext = currentSectionPath.join(' > ');
             const tableDescription = this.generateTableDescription(element, tableData, sectionContext);
             
-            const tableRef = `\n[TABLE ${tableCounter}] ${tableDescription}\n` +
+            const tableRef = `[TABLE ${tableCounter}] ${tableDescription}\n` +
                             `Section: ${sectionContext}\n` +
                             `Dimensions: ${tableData.rows} rows × ${tableData.cols} columns\n` +
                             `File: ${tableData.filename}\n` +
                             (tableData.anchor ? `Anchor: ${tableData.anchor}\n` : '');
             
-            currentChunkContent.push(tableRef);
+            currentChunkBody.push(tableRef);
 
             // Also index a table-focused chunk so retrieval can land on exact numeric context,
             // then tools can refine via CSV/table resolvers.
@@ -299,20 +301,20 @@ export class S1Processor {
               // Preserve citation precision: avoid mixing multiple HTML anchors in a single chunk.
               // If a new anchor appears mid-chunk, flush the current chunk before continuing.
               if (
-                currentChunkContent.length > 0 &&
+                currentChunkBody.length > 0 &&
                 currentChunkAnchor &&
                 elementAnchor !== currentChunkAnchor
               ) {
                 const chunk = this.createChunk(
                   chunkId++,
-                  currentChunkContent.join('\n\n'),
+                  this.composeChunkContent(currentSectionPath, currentChunkBody),
                   currentSectionPath,
                   element.page_idx,
                   currentChunkAnchor || currentAnchor,
                   this.inferTextChunkType(currentSectionPath)
                 );
                 allChunks.push(chunk);
-                currentChunkContent = [];
+                currentChunkBody = [];
                 currentChunkAnchor = undefined;
               }
 
@@ -321,23 +323,25 @@ export class S1Processor {
                 currentChunkAnchor = elementAnchor;
               }
             }
-            currentChunkContent.push(content);
+            currentChunkBody.push(content);
             
             // Check if we need to split chunk due to size
-            const currentText = currentChunkContent.join('\n\n');
-            if (currentText.length > this.config.chunkSize) {
+            const preamble = this.buildChunkPreamble(currentSectionPath);
+            const bodyText = currentChunkBody.join('\n\n');
+            const overhead = preamble ? preamble.length + 2 : 0;
+            const totalLength = overhead + bodyText.length;
+
+            if (totalLength > this.config.chunkSize) {
               // Find optimal split point using semantic boundaries
-              const splitChunks = this.splitTextAtSemanticBoundaries(
-                currentText, 
-                this.config.chunkSize, 
-                this.config.chunkOverlap
-              );
+              const bodyBudget = Math.max(1, this.config.chunkSize - overhead);
+              const overlapBudget = Math.min(this.config.chunkOverlap, Math.max(0, bodyBudget - 1));
+              const splitChunks = this.splitTextAtSemanticBoundaries(bodyText, bodyBudget, overlapBudget);
               
               // Create chunks from splits
               for (let i = 0; i < splitChunks.length - 1; i++) {
                 const chunk = this.createChunk(
                   chunkId++,
-                  splitChunks[i],
+                  preamble ? `${preamble}\n\n${splitChunks[i]}` : splitChunks[i],
                   currentSectionPath,
                   element.page_idx,
                   currentChunkAnchor || currentAnchor,
@@ -347,7 +351,7 @@ export class S1Processor {
               }
               
               // Keep the last split as current content for overlap
-              currentChunkContent = [splitChunks[splitChunks.length - 1]];
+              currentChunkBody = [splitChunks[splitChunks.length - 1]];
               currentChunkAnchor = currentChunkAnchor || currentAnchor;
             }
           }
@@ -361,10 +365,10 @@ export class S1Processor {
     }
 
     // Save the last chunk
-    if (currentChunkContent.length > 0) {
+    if (currentChunkBody.length > 0) {
       const chunk = this.createChunk(
         chunkId++,
-        currentChunkContent.join('\n\n'),
+        this.composeChunkContent(currentSectionPath, currentChunkBody),
         currentSectionPath,
         elements[elements.length - 1]?.page_idx || 0,
         currentChunkAnchor || currentAnchor,
@@ -448,6 +452,31 @@ export class S1Processor {
     return chunks;
   }
 
+  private buildChunkPreamble(sectionPath: string[]): string {
+    const cleaned = (sectionPath || []).map(s => s.trim()).filter(Boolean);
+    if (cleaned.length === 0) return '';
+
+    const major = cleaned[0];
+    // Keep default pre-major chunks lean: cover-page-only context is rarely helpful and it reduces
+    // the available chunk budget (which can cause unnecessary splits).
+    if (cleaned.length === 1 && major.toLowerCase() === 'cover page') return '';
+    if (cleaned.length === 1) return `# ${major}`;
+
+    const leaf = cleaned[cleaned.length - 1];
+    if (!leaf || leaf === major) return `# ${major}`;
+
+    // Keep the preamble short: major + leaf is enough context for retrieval without bloating every chunk.
+    return `# ${major}\n\n## ${leaf}`;
+  }
+
+  private composeChunkContent(sectionPath: string[], bodyParts: string[]): string {
+    const preamble = this.buildChunkPreamble(sectionPath);
+    const body = (bodyParts || []).join('\n\n').trim();
+    if (!preamble) return body;
+    if (!body) return preamble;
+    return `${preamble}\n\n${body}`.trim();
+  }
+
   private generateTableDescription(
     element: ContentElement, 
     tableData: TableData, 
@@ -506,7 +535,8 @@ export class S1Processor {
       id: `${this.filingId}-chunk-${padded}`,
       filing_id: this.filingId,
       text: content,
-      section_path: sectionPath,
+      // Clone to avoid accidental mutation as the parser continues to update currentSectionPath.
+      section_path: [...sectionPath],
       section_hierarchy: sectionPath.join(' > '),
       page_idx: pageIdx,
       anchor,

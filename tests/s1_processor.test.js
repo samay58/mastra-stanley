@@ -107,3 +107,40 @@ test('S1Processor: detects table title/header/data-start for a numeric table', a
   }
 });
 
+test('S1Processor: section_path metadata is not mutated by later headings', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'mastra-stanley-test-'));
+  try {
+    const contentListPath = join(dir, 'content_list.json');
+    const outputDir = join(dir, 'out');
+
+    await writeFile(
+      contentListPath,
+      JSON.stringify(
+        [
+          { type: 'text', text: 'RISK FACTORS', text_level: 1, page_idx: 0 },
+          { type: 'text', text: 'Intro paragraph.', page_idx: 0 },
+          { type: 'text', text: 'We may not succeed.', text_level: 1, page_idx: 0 },
+          { type: 'text', text: 'Body paragraph.', page_idx: 0 },
+        ],
+        null,
+        2
+      ),
+      'utf-8'
+    );
+
+    const processor = new S1Processor(
+      contentListPath,
+      outputDir,
+      { chunkSize: 500, chunkOverlap: 0, extractMetadata: true },
+      { filingId: 'test' }
+    );
+
+    const { chunks } = await processor.processDocument();
+
+    const introChunk = chunks.find(c => c.content.includes('Intro paragraph.'));
+    assert.ok(introChunk, 'expected intro chunk');
+    assert.deepEqual(introChunk.metadata.section_path, ['RISK FACTORS']);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
