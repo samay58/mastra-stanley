@@ -19,7 +19,7 @@
     "validate-report": "tsx src/scripts/validateReport.ts",
     "test-financial-agent": "tsx examples/agent_quick_check.ts",
     "preview-table-tool": "tsx examples/table_tool_preview.ts",
-    "test": "jest",
+    "test": "npm run build && node --test tests/*.test.js",
     "mastra:dev": "mastra dev"
   },
   "keywords": [
