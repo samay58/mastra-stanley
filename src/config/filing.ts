@@ -8,6 +8,7 @@ export interface FilingContext {
   chunksPath: string;
   tablesDir: string;
   tablesManifestPath: string;
+  sectionsManifestPath: string;
   factsPath: string;
   contentListPath: string;
 }
@@ -39,6 +40,7 @@ export function getFilingContext(filingId: string): FilingContext {
     chunksPath: join(outputDir, 'text_chunks.jsonl'),
     tablesDir: join(outputDir, 'tables'),
     tablesManifestPath: join(outputDir, 'tables_manifest.json'),
+    sectionsManifestPath: join(outputDir, 'sections_manifest.json'),
     factsPath: join(outputDir, 'facts.json'),
     contentListPath: join(outputDir, 'content_list.json'),
   };

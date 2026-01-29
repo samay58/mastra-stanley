@@ -788,6 +788,12 @@ export class S1Processor {
     await writeFile(tablesManifestPath, JSON.stringify(tables, null, 2), 'utf-8');
     console.log(`✓ Saved ${tables.length} tables to ${tablesManifestPath}`);
 
+    // Save a sections manifest (lightweight node tree derived from chunk metadata).
+    const sectionsManifestPath = join(this.outputDir, 'sections_manifest.json');
+    const sectionsManifest = this.buildSectionsManifest(chunks);
+    await writeFile(sectionsManifestPath, JSON.stringify(sectionsManifest, null, 2), 'utf-8');
+    console.log(`✓ Saved sections manifest to ${sectionsManifestPath}`);
+
     // Create Mastra-ready format
     const mastraFormat = {
       source: this.sourceUrl ? `${this.filingId} S-1 Filing (${this.sourceUrl})` : `${this.filingId} S-1 Filing`,
@@ -803,6 +809,71 @@ export class S1Processor {
     const mastraPath = join(this.outputDir, 'mastra_import.json');
     await writeFile(mastraPath, JSON.stringify(mastraFormat, null, 2), 'utf-8');
     console.log(`✓ Created Mastra import file at ${mastraPath}`);
+  }
+
+  private buildSectionsManifest(chunks: Chunk[]): any {
+    type WorkingNode = {
+      title: string;
+      path: string[];
+      chunkIds: Set<string>;
+      anchors: Set<string>;
+      children: Map<string, WorkingNode>;
+    };
+
+    const root: WorkingNode = {
+      title: '__root__',
+      path: [],
+      chunkIds: new Set(),
+      anchors: new Set(),
+      children: new Map(),
+    };
+
+    const getOrCreate = (parent: WorkingNode, title: string, path: string[]): WorkingNode => {
+      const existing = parent.children.get(title);
+      if (existing) return existing;
+      const next: WorkingNode = {
+        title,
+        path,
+        chunkIds: new Set(),
+        anchors: new Set(),
+        children: new Map(),
+      };
+      parent.children.set(title, next);
+      return next;
+    };
+
+    for (const chunk of chunks) {
+      const path = (chunk.metadata.section_path || []).filter(Boolean);
+      const sectionPath = path.length > 0 ? path : ['(uncategorized)'];
+      const anchor = chunk.metadata.anchor;
+
+      let node = root;
+      for (let i = 0; i < sectionPath.length; i++) {
+        const title = sectionPath[i];
+        const nextPath = sectionPath.slice(0, i + 1);
+        node = getOrCreate(node, title, nextPath);
+        node.chunkIds.add(chunk.id);
+        if (anchor) node.anchors.add(anchor);
+      }
+    }
+
+    const toPlain = (node: WorkingNode): any => ({
+      title: node.title,
+      path: node.path,
+      chunk_ids: Array.from(node.chunkIds),
+      anchors: Array.from(node.anchors),
+      children: Array.from(node.children.values())
+        .sort((a, b) => a.title.localeCompare(b.title))
+        .map(toPlain),
+    });
+
+    return {
+      filing_id: this.filingId,
+      generated_at: new Date().toISOString(),
+      sections: Array.from(root.children.values())
+        .sort((a, b) => a.title.localeCompare(b.title))
+        .map(toPlain),
+    };
   }
 
   private formatTableChunkContent(
