@@ -360,7 +360,7 @@ export const s1TableLookupTool = createTool({
   id: 'lookupS1Table',
   description: 'Look up specific tables from the S-1 document by table number or content description',
   inputSchema: z.object({
-    tableNumber: z.number().optional().describe('Table number (1-71)'),
+    tableNumber: z.number().optional().describe('Table number (as extracted for the active filing)'),
     keyword: z.string().optional().describe('Keyword to search in table filenames'),
     section: z.string().optional().describe('Section containing the table')
   }),
@@ -482,7 +482,7 @@ export const s1TableDataTool = createTool({
   id: 'readS1TableData',
   description: 'Read and parse CSV table data from S-1 financial tables, returning clean structured data',
   inputSchema: z.object({
-    tableNumber: z.number().optional().describe('Table number to read (1-71)'),
+    tableNumber: z.number().optional().describe('Table number to read (as extracted for the active filing)'),
     filename: z.string().optional().describe('Specific filename to read'),
     keyword: z.string().optional().describe('Keyword to find specific table (e.g., "revenue", "operations", "financial")'),
     rowFilter: z.string().optional().describe('Filter rows containing this text'),
