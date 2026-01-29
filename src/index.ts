@@ -5,6 +5,7 @@ export * from './agents/s1QueryAgent.js';
 export * from './workflows/s1QueryWorkflow.js';
 export * from './tools/vectorQuery.js';
 export * from './tools/facts.js';
+export * from './tools/chunks.js';
 export * from './processor/S1Processor.js';
 export { EmbeddingGenerator } from './embeddings/generate-embeddings.js';
 export * from './facts/types.js';

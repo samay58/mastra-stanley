@@ -106,6 +106,8 @@ class EmbeddingGenerator {
       anchor: chunk.metadata.anchor,
       source_url: chunk.metadata.source_url,
       chunk_type: chunk.metadata.chunk_type,
+      prev_chunk_id: chunk.metadata.prev_chunk_id,
+      next_chunk_id: chunk.metadata.next_chunk_id,
       chunk_size: chunk.metadata.chunk_size,
       timestamp: chunk.metadata.timestamp
     }));

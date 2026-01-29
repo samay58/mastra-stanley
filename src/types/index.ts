@@ -40,6 +40,8 @@ export const ChunkMetadataSchema = z.object({
     'financial_statements',
     'table_reference',
   ]),
+  prev_chunk_id: z.string().optional(),
+  next_chunk_id: z.string().optional(),
   chunk_size: z.number(),
   timestamp: z.string()
 });

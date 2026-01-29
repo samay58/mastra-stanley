@@ -15,6 +15,7 @@ import {
   s1EnhancedSearchTool
 } from '../tools/vectorQuery.js';
 import { s1FactsLookupTool } from '../tools/facts.js';
+import { s1ChunkContextTool } from '../tools/chunks.js';
 
 // Create memory system for S-1 analysis with context retention
 const memory = new Memory({
@@ -97,6 +98,7 @@ Remember: This S-1 contains comprehensive financial information. If basic querie
   
   tools: {
     lookupS1Facts: s1FactsLookupTool,
+    readS1ChunkContext: s1ChunkContextTool,
     enhancedS1Search: s1EnhancedSearchTool,
     searchS1Document: s1VectorQueryTool,
     searchS1WithRerank: s1SearchWithRerankTool,

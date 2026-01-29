@@ -248,7 +248,11 @@ export class HybridSearcher {
               section_path: vResult.metadata.section_path?.split(' > ') || [],
               section_hierarchy: vResult.metadata.section_hierarchy || '',
               page_idx: vResult.metadata.page_idx || 0,
+              anchor: vResult.metadata.anchor,
+              source_url: vResult.metadata.source_url,
               chunk_type: vResult.metadata.chunk_type || 'text',
+              prev_chunk_id: vResult.metadata.prev_chunk_id,
+              next_chunk_id: vResult.metadata.next_chunk_id,
               chunk_size: vResult.metadata.chunk_size || 0,
               timestamp: vResult.metadata.timestamp || new Date().toISOString()
             }

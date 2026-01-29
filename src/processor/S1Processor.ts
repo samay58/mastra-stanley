@@ -53,25 +53,32 @@ export class S1Processor {
     }
     
     if (text) {
-      const normalizedText = text.trim().toUpperCase();
+      // Table of contents lines are highly adversarial for heading detection because they
+      // contain many section names and page numbers. Treat them as normal text so we can
+      // skip them deterministically in the main loop.
+      if (this.looksLikeTableOfContents(text)) {
+        return 'TEXT';
+      }
+
+      const normalizedText = this.normalizeHeadingMatchText(text);
       
       // Check for exact major section matches
       if (MAJOR_SECTIONS.includes(normalizedText as any)) {
         return 'MAJOR_HEADING';
       }
       
-      // Check for partial matches with key financial sections
-      const financialSections = [
-        'MANAGEMENT\'S DISCUSSION AND ANALYSIS',
-        'FINANCIAL STATEMENTS',
-        'RESULTS OF OPERATIONS',
-        'LIQUIDITY AND CAPITAL RESOURCES',
-        'CONSOLIDATED STATEMENTS'
-      ];
-      
-      for (const section of financialSections) {
-        if (normalizedText.includes(section)) {
-          return 'MAJOR_HEADING';
+      // Check for partial matches with key financial sections.
+      // Guard aggressively: normal paragraphs frequently mention "financial statements".
+      if (this.looksLikeHeadingText(text)) {
+        const financialSections = [
+          "MANAGEMENT'S DISCUSSION AND ANALYSIS",
+          'FINANCIAL STATEMENTS',
+        ];
+        
+        for (const section of financialSections) {
+          if (normalizedText.includes(section)) {
+            return 'MAJOR_HEADING';
+          }
         }
       }
       
@@ -87,6 +94,52 @@ export class S1Processor {
     }
     
     return 'TEXT';
+  }
+
+  private normalizeHeadingMatchText(text: string): string {
+    return text
+      .trim()
+      .replace(/\u00a0/g, ' ')
+      // Normalize “smart quotes” so heading matching isn't filing-template-specific.
+      .replace(/[\u2018\u2019\u2032]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
+  }
+
+  private looksLikeHeadingText(text: string): boolean {
+    const cleaned = text
+      .trim()
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ');
+
+    if (!cleaned) return false;
+    if (cleaned.length > 160) return false;
+    // Headings rarely end with sentence punctuation.
+    if (/[.!?]\s*$/.test(cleaned)) return false;
+
+    const letters = cleaned.replace(/[^A-Za-z]/g, '');
+    if (letters.length >= 6 && letters === letters.toUpperCase()) return true;
+
+    return /^[A-Z][A-Za-z0-9 ,.'()-]{3,}$/.test(cleaned);
+  }
+
+  private looksLikeTableOfContents(text: string): boolean {
+    const upper = text.toUpperCase();
+    if (upper.includes('TABLE OF CONTENTS')) return true;
+
+    // Some extracted filings collapse the entire TOC into one long line.
+    // Detect it by “many major section names + page-like tokens”.
+    let sectionHits = 0;
+    for (const section of MAJOR_SECTIONS) {
+      if (upper.includes(section)) sectionHits += 1;
+      if (sectionHits >= 3) break;
+    }
+
+    if (sectionHits < 3) return false;
+    if (/\b\d+\b/.test(text)) return true;
+    if (/\b[iivx]+\b/i.test(text)) return true; // roman numerals (e.g., "ii")
+    return false;
   }
 
   private inferTextChunkType(sectionPath: string[]): ChunkMetadata['chunk_type'] {
@@ -237,6 +290,11 @@ export class S1Processor {
 
         case 'TEXT':
           if (content) {
+            if (this.looksLikeTableOfContents(content)) {
+              // TOC lines add noise and break section inference. We skip them entirely.
+              break;
+            }
+
             if (elementAnchor) {
               // Preserve citation precision: avoid mixing multiple HTML anchors in a single chunk.
               // If a new anchor appears mid-chunk, flush the current chunk before continuing.
@@ -313,6 +371,12 @@ export class S1Processor {
         this.inferTextChunkType(currentSectionPath)
       );
       allChunks.push(chunk);
+    }
+
+    // Link adjacent chunks so query-time synthesis can pull local context without re-running parsing.
+    for (let i = 0; i < allChunks.length; i++) {
+      allChunks[i].metadata.prev_chunk_id = i > 0 ? allChunks[i - 1].id : undefined;
+      allChunks[i].metadata.next_chunk_id = i < allChunks.length - 1 ? allChunks[i + 1].id : undefined;
     }
 
     console.log(`Processing complete: ${allChunks.length} chunks, ${allTables.length} tables`);
