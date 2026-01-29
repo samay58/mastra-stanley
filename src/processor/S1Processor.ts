@@ -70,13 +70,20 @@ export class S1Processor {
       // Check for partial matches with key financial sections.
       // Guard aggressively: normal paragraphs frequently mention "financial statements".
       if (this.looksLikeHeadingText(text)) {
-        const financialSections = [
-          "MANAGEMENT'S DISCUSSION AND ANALYSIS",
+        if (normalizedText.includes("MANAGEMENT'S DISCUSSION AND ANALYSIS")) {
+          return 'MAJOR_HEADING';
+        }
+
+        // Only treat financial statement headings as "major" when they are explicit and short.
+        // Many S-1 paragraphs contain the phrase "financial statements"; an `includes()` match
+        // here causes noisy section resets (especially with repeated page headers).
+        const financialHeadings = [
           'FINANCIAL STATEMENTS',
+          'CONSOLIDATED FINANCIAL STATEMENTS',
         ];
-        
-        for (const section of financialSections) {
-          if (normalizedText.includes(section)) {
+
+        for (const heading of financialHeadings) {
+          if (normalizedText === heading) {
             return 'MAJOR_HEADING';
           }
         }
@@ -142,6 +149,56 @@ export class S1Processor {
     return false;
   }
 
+  private normalizeBoilerplateKey(text: string): string {
+    return text
+      .trim()
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .toUpperCase();
+  }
+
+  private isLikelyBoilerplateLine(normalizedUpper: string): boolean {
+    if (!normalizedUpper) return false;
+
+    // Common SEC filing header/footer patterns.
+    if (normalizedUpper.includes('SECURITIES AND EXCHANGE COMMISSION')) return true;
+    if (normalizedUpper.includes('FORM S-1')) return true;
+
+    // Repeated running headers like: "Company, Inc. / S-1 / July 1, 2025"
+    if (normalizedUpper.includes('/ S-1 /')) return true;
+    if (normalizedUpper.includes('S-1') && /\b20\d{2}\b/.test(normalizedUpper) && normalizedUpper.includes('/')) return true;
+
+    return false;
+  }
+
+  private detectBoilerplateLines(elements: ContentElement[]): Set<string> {
+    const counts = new Map<string, number>();
+
+    for (const el of elements) {
+      if (el.type !== 'text') continue;
+      const text = el.text?.trim();
+      if (!text) continue;
+
+      const key = this.normalizeBoilerplateKey(text);
+      if (key.length === 0) continue;
+      // Only consider short, repeated strings as header/footer candidates.
+      if (key.length > 120) continue;
+
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+
+    const out = new Set<string>();
+    for (const [key, count] of counts.entries()) {
+      // A repeated header/footer typically shows up on many pages.
+      if (count < 8) continue;
+      if (this.isLikelyBoilerplateLine(key)) {
+        out.add(key);
+      }
+    }
+
+    return out;
+  }
+
   private inferTextChunkType(sectionPath: string[]): ChunkMetadata['chunk_type'] {
     const major = (sectionPath[0] || '').toUpperCase();
     if (!major) return 'text';
@@ -177,6 +234,11 @@ export class S1Processor {
     const elements = await this.loadContentList();
     console.log(`Loaded ${elements.length} elements`);
 
+    const boilerplateLines = this.detectBoilerplateLines(elements);
+    if (boilerplateLines.size > 0) {
+      console.log(`Detected ${boilerplateLines.size} boilerplate header/footer lines to skip.`);
+    }
+
     // State tracking
     const allChunks: Chunk[] = [];
     const allTables: TableData[] = [];
@@ -197,9 +259,17 @@ export class S1Processor {
     
     for (let i = 0; i < elements.length; i++) {
       const element = elements[i];
-      const elemType = this.classifyElement(element);
       const content = element.text?.trim() || '';
       const elementAnchor = element.anchor?.trim() || undefined;
+
+      if (element.type === 'text' && content) {
+        const key = this.normalizeBoilerplateKey(content);
+        if (boilerplateLines.has(key)) {
+          continue;
+        }
+      }
+
+      const elemType = this.classifyElement(element);
 
       switch (elemType) {
         case 'MAJOR_HEADING':
