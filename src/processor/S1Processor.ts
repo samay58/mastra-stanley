@@ -89,6 +89,36 @@ export class S1Processor {
     return 'TEXT';
   }
 
+  private inferTextChunkType(sectionPath: string[]): ChunkMetadata['chunk_type'] {
+    const major = (sectionPath[0] || '').toUpperCase();
+    if (!major) return 'text';
+
+    if (major.includes("MANAGEMENT'S DISCUSSION AND ANALYSIS")) return 'mdna';
+    if (major.includes('PROSPECTUS SUMMARY')) return 'summary';
+    if (major.includes('RISK FACTORS')) return 'risk_factor';
+    if (major.includes('BUSINESS')) return 'business';
+    if (major.includes('EXECUTIVE COMPENSATION')) return 'exec_comp';
+    if (major === 'MANAGEMENT') return 'management';
+    if (major.includes('PRINCIPAL AND SELLING STOCKHOLDERS')) return 'ownership';
+    if (
+      major.includes('CAPITALIZATION') ||
+      major.includes('DILUTION') ||
+      major.includes('DESCRIPTION OF CAPITAL STOCK') ||
+      major.includes('SHARES ELIGIBLE FOR FUTURE SALE')
+    ) {
+      return 'capital_structure';
+    }
+    if (major.includes('UNDERWRITERS')) return 'underwriters';
+    if (
+      major.includes('FINANCIAL STATEMENTS') ||
+      major.includes('INDEX TO CONSOLIDATED FINANCIAL STATEMENTS')
+    ) {
+      return 'financial_statements';
+    }
+
+    return 'text';
+  }
+
   async processDocument(): Promise<{ chunks: Chunk[], tables: TableData[] }> {
     console.log('Loading S-1 content list...');
     const elements = await this.loadContentList();
@@ -126,7 +156,8 @@ export class S1Processor {
               currentChunkContent.join('\n\n'),
               currentSectionPath,
               elements[i - 1]?.page_idx || 0,
-              currentChunkAnchor || currentAnchor
+              currentChunkAnchor || currentAnchor,
+              this.inferTextChunkType(currentSectionPath)
             );
             allChunks.push(chunk);
             currentChunkContent = [];
@@ -207,6 +238,26 @@ export class S1Processor {
         case 'TEXT':
           if (content) {
             if (elementAnchor) {
+              // Preserve citation precision: avoid mixing multiple HTML anchors in a single chunk.
+              // If a new anchor appears mid-chunk, flush the current chunk before continuing.
+              if (
+                currentChunkContent.length > 0 &&
+                currentChunkAnchor &&
+                elementAnchor !== currentChunkAnchor
+              ) {
+                const chunk = this.createChunk(
+                  chunkId++,
+                  currentChunkContent.join('\n\n'),
+                  currentSectionPath,
+                  element.page_idx,
+                  currentChunkAnchor || currentAnchor,
+                  this.inferTextChunkType(currentSectionPath)
+                );
+                allChunks.push(chunk);
+                currentChunkContent = [];
+                currentChunkAnchor = undefined;
+              }
+
               currentAnchor = elementAnchor;
               if (!currentChunkAnchor) {
                 currentChunkAnchor = elementAnchor;
@@ -231,7 +282,8 @@ export class S1Processor {
                   splitChunks[i],
                   currentSectionPath,
                   element.page_idx,
-                  currentChunkAnchor || currentAnchor
+                  currentChunkAnchor || currentAnchor,
+                  this.inferTextChunkType(currentSectionPath)
                 );
                 allChunks.push(chunk);
               }
@@ -257,7 +309,8 @@ export class S1Processor {
         currentChunkContent.join('\n\n'),
         currentSectionPath,
         elements[elements.length - 1]?.page_idx || 0,
-        currentChunkAnchor || currentAnchor
+        currentChunkAnchor || currentAnchor,
+        this.inferTextChunkType(currentSectionPath)
       );
       allChunks.push(chunk);
     }

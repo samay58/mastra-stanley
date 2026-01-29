@@ -26,7 +26,20 @@ export const ChunkMetadataSchema = z.object({
   page_idx: z.number(),
   anchor: z.string().optional(),
   source_url: z.string().optional(),
-  chunk_type: z.enum(['text', 'table_reference']),
+  chunk_type: z.enum([
+    'text',
+    'summary',
+    'risk_factor',
+    'mdna',
+    'business',
+    'management',
+    'exec_comp',
+    'ownership',
+    'capital_structure',
+    'underwriters',
+    'financial_statements',
+    'table_reference',
+  ]),
   chunk_size: z.number(),
   timestamp: z.string()
 });
