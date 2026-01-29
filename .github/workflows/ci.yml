@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Tests
+        run: npm test
+
+      - name: Process Fixture Filing
+        run: npm run process-s1
+
+      - name: Eval (retrieval)
+        env:
+          EVAL_STRICT: "true"
+          EVAL_MIN_SECTION_RECALL_AT_K: "0.5"
+          EVAL_MIN_CHUNK_TYPE_MRR: "0.2"
+        run: npm run eval:retrieval -- --strict
+
