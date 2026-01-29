@@ -473,6 +473,8 @@ export class S1Processor {
       
       if (rows.length === 0) return null;
 
+      const structure = this.analyzeTableStructure(rows);
+
       // Generate descriptive filename
       const sectionSlug = sectionPath[sectionPath.length - 1]
         ?.toLowerCase()
@@ -492,6 +494,7 @@ export class S1Processor {
         anchor,
         caption: element.table_caption?.join(' ') || undefined,
         source_url: this.sourceUrl,
+        ...structure,
         rows: rows.length,
         cols: rows[0]?.length || 0,
         data: rows
@@ -570,6 +573,135 @@ export class S1Processor {
     return matrix.map(r => (r.length === maxCols ? r : [...r, ...Array(maxCols - r.length).fill('')]));
   }
 
+  private analyzeTableStructure(rows: string[][]): Pick<TableData, 'title' | 'header' | 'header_row_count' | 'data_start_row'> {
+    const collapseDuplicateRuns = (row: string[]): string[] => {
+      const out = [...row];
+      let prev: string | null = null;
+      for (let i = 0; i < out.length; i++) {
+        const cell = (out[i] || '').trim();
+        if (!cell) {
+          prev = null;
+          continue;
+        }
+        if (prev && cell === prev) {
+          out[i] = '';
+          continue;
+        }
+        prev = cell;
+      }
+      return out;
+    };
+
+    const isYearCell = (cellRaw: string): boolean => {
+      const cell = (cellRaw || '').trim();
+      const m = cell.match(/^(\d{4})$/);
+      if (!m) return false;
+      const y = Number(m[1]);
+      return Number.isFinite(y) && y >= 1900 && y <= 2099;
+    };
+
+    const isNumberishCell = (cellRaw: string): boolean => {
+      const cell = (cellRaw || '').trim();
+      if (!cell) return false;
+      if (!/\d/.test(cell)) return false;
+
+      // Footnote markers like "(1)" shouldn't drive table structure heuristics.
+      if (/^\(?\d{1,2}\)?$/.test(cell)) return false;
+
+      // Common number formats in filings: "$ 1,234", "(1,234)", "12.3%", "1,234", etc.
+      const cleaned = cell
+        .replace(/[$,]/g, '')
+        .replace(/\s+/g, '')
+        .replace(/^\((.*)\)$/, '-$1');
+
+      if (/^-?\d+(\.\d+)?%?$/.test(cleaned)) return true;
+      if (/\d{1,3}(,\d{3})+/.test(cell)) return true;
+      if (/\d+\.\d+/.test(cell)) return true;
+
+      return false;
+    };
+
+    const collapsed = rows.map(collapseDuplicateRuns);
+
+    const totalNumberish = collapsed.reduce((acc, row) => {
+      for (const cell of row) {
+        if (isNumberishCell(cell) && !isYearCell(cell)) acc += 1;
+      }
+      return acc;
+    }, 0);
+
+    // If the table doesn't appear numeric, treat it as "layout". We still keep it,
+    // but we don't try to guess headers.
+    if (totalNumberish < 4) {
+      return {};
+    }
+
+    // Collect top title/preamble rows that are effectively a single cell spanning columns.
+    const titleRows: string[] = [];
+    let start = 0;
+    for (let r = 0; r < Math.min(3, collapsed.length); r++) {
+      const row = collapsed[r] || [];
+      const nonEmpty = row.map(c => (c || '').trim()).filter(Boolean);
+      if (nonEmpty.length !== 1) break;
+      titleRows.push(nonEmpty[0]);
+      start = r + 1;
+    }
+
+    const looksLikeDataRow = (row: string[]): boolean => {
+      const nonEmptyCount = row.map(c => (c || '').trim()).filter(Boolean).length;
+      if (nonEmptyCount < 2) return false;
+
+      const numberCount = row.reduce((acc, cell, idx) => {
+        if (idx === 0) return acc;
+        if (isNumberishCell(cell) && !isYearCell(cell)) return acc + 1;
+        return acc;
+      }, 0);
+
+      if (numberCount >= 2) return true;
+      const label = (row[0] || '').trim();
+      const hasLabelText = /[A-Za-z]/.test(label);
+      return numberCount >= 1 && hasLabelText;
+    };
+
+    let dataStartRow: number | undefined;
+    for (let r = start; r < collapsed.length; r++) {
+      if (looksLikeDataRow(collapsed[r] || [])) {
+        dataStartRow = r;
+        break;
+      }
+    }
+
+    if (dataStartRow === undefined) {
+      return {
+        title: titleRows.length > 0 ? titleRows.join(' ') : undefined,
+      };
+    }
+
+    const headerStart = start;
+    const headerEnd = Math.max(headerStart - 1, dataStartRow - 1);
+    const headerRows = headerEnd >= headerStart ? collapsed.slice(headerStart, headerEnd + 1) : [];
+
+    const maxCols = collapsed.reduce((m, row) => Math.max(m, row.length), 0);
+    const mergedHeader =
+      headerRows.length > 0
+        ? Array.from({ length: maxCols }, (_v, col) => {
+            const parts = headerRows
+              .map(r => (r[col] || '').trim())
+              .filter(Boolean);
+            const merged = parts.join(' ').replace(/\s+/g, ' ').trim();
+            if (col === 0 && !merged) return 'Row';
+            return merged;
+          })
+        : undefined;
+
+    return {
+      title: titleRows.length > 0 ? titleRows.join(' ') : undefined,
+      header: mergedHeader,
+      header_row_count: headerRows.length > 0 ? headerRows.length : undefined,
+      data_start_row: dataStartRow,
+    };
+  }
+
   private convertToCSV(data: string[][]): string {
     return data.map(row => 
       row.map(cell => {
@@ -620,6 +752,7 @@ export class S1Processor {
       `Description: ${tableDescription}`,
       `Section: ${sectionContext || 'Unknown'}`,
       tableData.caption ? `Caption: ${tableData.caption}` : undefined,
+      tableData.title ? `Title: ${tableData.title}` : undefined,
       tableData.anchor ? `Anchor: ${tableData.anchor}` : undefined,
       tableData.source_url ? `Source: ${tableData.source_url}` : undefined,
       `Dimensions: ${tableData.rows} rows x ${tableData.cols} cols`,
@@ -631,7 +764,11 @@ export class S1Processor {
       .join('\n');
 
     const maxRows = 40;
-    const slice = tableData.data.slice(0, maxRows);
+    const dataStartRow = Number.isFinite(tableData.data_start_row) ? (tableData.data_start_row as number) : 0;
+    const slice =
+      tableData.header && tableData.header.length > 0
+        ? [tableData.header, ...tableData.data.slice(dataStartRow, dataStartRow + maxRows)]
+        : tableData.data.slice(0, maxRows);
     const safeCell = (cell: string): string =>
       (cell || '')
         .replace(/\|/g, '/') // avoid breaking markdown tables
@@ -651,8 +788,12 @@ export class S1Processor {
           ].join('\n')
         : '(empty table)';
 
-    const truncatedNote = tableData.data.length > maxRows
-      ? `\n\n[Truncated: showing first ${maxRows} of ${tableData.data.length} rows]`
+    const totalDataRows =
+      Number.isFinite(tableData.data_start_row) && (tableData.data_start_row as number) >= 0
+        ? Math.max(0, tableData.data.length - (tableData.data_start_row as number))
+        : tableData.data.length;
+    const truncatedNote = totalDataRows > maxRows
+      ? `\n\n[Truncated: showing first ${maxRows} of ${totalDataRows} rows]`
       : '';
 
     return `${header}\n${markdownTable}${truncatedNote}`;

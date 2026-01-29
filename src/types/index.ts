@@ -61,6 +61,12 @@ export interface TableData {
   anchor?: string;
   caption?: string;
   source_url?: string;
+  // Optional structure hints derived during HTML parsing. These are used to
+  // render better previews, skip non-data preambles, and support deterministic extraction.
+  title?: string;
+  header?: string[];
+  header_row_count?: number;
+  data_start_row?: number;
   rows: number;
   cols: number;
   data: any[][];

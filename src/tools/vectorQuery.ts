@@ -493,6 +493,9 @@ export const s1TableDataTool = createTool({
       tableNumber: z.number(),
       filename: z.string(),
       description: z.string(),
+      caption: z.string().optional(),
+      anchor: z.string().optional(),
+      source_url: z.string().optional(),
       headers: z.array(z.string()).optional(),
       rows: z.array(z.array(z.string())),
       cleanedData: z.array(z.object({
@@ -507,9 +510,41 @@ export const s1TableDataTool = createTool({
     const { tableNumber, filename, keyword, rowFilter, cleanData } = context;
     const { readdir, readFile } = await import('fs/promises');
     const { join } = await import('path');
-    const tablesDir = getActiveFilingContext().tablesDir;
+    const filing = getActiveFilingContext();
+    const tablesDir = filing.tablesDir;
     
     try {
+      type ManifestEntry = {
+        filename?: string;
+        section?: string;
+        caption?: string;
+        anchor?: string;
+        source_url?: string;
+        title?: string;
+        header?: string[];
+        header_row_count?: number;
+        data_start_row?: number;
+      };
+
+      let manifest: ManifestEntry[] | null = null;
+      try {
+        const raw = await readFile(filing.tablesManifestPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          manifest = parsed as ManifestEntry[];
+        }
+      } catch {
+        // optional
+      }
+
+      const manifestByFilename = manifest
+        ? new Map(
+            manifest
+              .map(entry => [entry.filename, entry] as const)
+              .filter((pair): pair is readonly [string, ManifestEntry] => typeof pair[0] === 'string')
+          )
+        : null;
+
       let targetFiles: string[] = [];
       
       if (filename) {
@@ -517,8 +552,12 @@ export const s1TableDataTool = createTool({
         targetFiles = [filename];
       } else {
         // Find matching tables
-        const files = await readdir(tablesDir);
-        let csvFiles = files.filter(f => f.endsWith('.csv'));
+        const files = manifest
+          ? manifest
+              .map(entry => entry.filename)
+              .filter((name): name is string => typeof name === 'string' && name.endsWith('.csv'))
+          : (await readdir(tablesDir)).filter(f => f.endsWith('.csv'));
+        let csvFiles = files;
         
         if (tableNumber) {
           const paddedNum = String(tableNumber).padStart(3, '0');
@@ -527,7 +566,15 @@ export const s1TableDataTool = createTool({
         
         if (keyword) {
           const lowerKeyword = keyword.toLowerCase();
-          csvFiles = csvFiles.filter(f => f.toLowerCase().includes(lowerKeyword));
+          csvFiles = csvFiles.filter(f => {
+            if (f.toLowerCase().includes(lowerKeyword)) return true;
+            const entry = manifestByFilename?.get(f);
+            if (!entry) return false;
+            return (
+              (entry.caption || '').toLowerCase().includes(lowerKeyword) ||
+              (entry.section || '').toLowerCase().includes(lowerKeyword)
+            );
+          });
         }
         
         // For financial queries, prioritize key tables
@@ -553,6 +600,9 @@ export const s1TableDataTool = createTool({
         tableNumber: number;
         filename: string;
         description: string;
+        caption?: string;
+        anchor?: string;
+        source_url?: string;
         headers?: string[];
         rows: string[][];
         cleanedData?: CleanedTableRow[];
@@ -566,6 +616,8 @@ export const s1TableDataTool = createTool({
         const rows = await parseCSVContent(content);
         
         if (rows.length === 0) continue;
+
+        const entry = manifestByFilename?.get(file);
         
         // Extract table number from filename
         const tableNumMatch = file.match(/table_(\d+)/);
@@ -578,10 +630,21 @@ export const s1TableDataTool = createTool({
         // Enhanced header detection with year mapping
         let headers: string[] = [];
         let dataStartIndex = 0;
-        const { yearColumns, yearLabels } = detectYearHeaders(rows);
+
+        // Prefer processor-derived structure hints from the manifest when present.
+        if (entry?.header && Array.isArray(entry.header) && entry.header.length > 0) {
+          headers = entry.header;
+        }
+        if (Number.isFinite(entry?.data_start_row)) {
+          dataStartIndex = entry?.data_start_row as number;
+        }
+
+        const headerProbeRows =
+          dataStartIndex > 0 ? rows.slice(0, Math.min(rows.length, dataStartIndex)) : rows;
+        const { yearColumns, yearLabels } = detectYearHeaders(headerProbeRows);
         
         // Build enhanced headers with year information
-        if (yearColumns.length > 0) {
+        if (headers.length === 0 && yearColumns.length > 0) {
           // Find the row that contains period descriptions
           let headerRow: string[] | null = null;
           for (let i = 0; i < Math.min(3, rows.length); i++) {
@@ -608,7 +671,7 @@ export const s1TableDataTool = createTool({
               headers.push(`Year ${year}`);
             });
           }
-        } else {
+        } else if (headers.length === 0) {
           // Original logic as fallback
           if (rows[0] && rows[0].some(cell => /\d{4}|quarter|year|ended/i.test(cell))) {
             headers = rows[0];
@@ -658,6 +721,9 @@ export const s1TableDataTool = createTool({
           tableNumber: tableNum,
           filename: file,
           description: description || 'Financial Table',
+          caption: entry?.caption,
+          anchor: entry?.anchor,
+          source_url: entry?.source_url,
           headers: headers.length > 0 ? headers : undefined,
           rows: filteredRows,
           cleanedData: cleanedData.length > 0 ? cleanedData : undefined
