@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
+import * as cheerio from 'cheerio';
 import { 
   ContentElement, 
   Chunk, 
@@ -441,33 +442,71 @@ export class S1Processor {
   }
 
   private parseHTMLTable(html: string): string[][] {
-    // Simple regex-based HTML table parser
-    // In production, use a proper HTML parser like cheerio
-    const rows: string[][] = [];
-    const rowMatches = html.match(/<tr[^>]*>(.*?)<\/tr>/gs) || [];
-    
-    for (const rowHtml of rowMatches) {
-      const cells: string[] = [];
-      const cellMatches = rowHtml.match(/<t[dh][^>]*>(.*?)<\/t[dh]>/gs) || [];
-      
-      for (const cellHtml of cellMatches) {
-        const cellText = cellHtml
-          .replace(/<[^>]+>/g, '') // Remove HTML tags
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#x27;/g, "'")
-          .trim();
-        cells.push(cellText);
+    const normalizeCellText = (text: string): string =>
+      text
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    const $ = cheerio.load(html);
+    const table = $('table').first();
+    if (table.length === 0) return [];
+
+    // Track active rowspans: for each column index, either null or { text, remainingRows }.
+    const rowSpans: Array<{ text: string; remainingRows: number } | null> = [];
+    const matrix: string[][] = [];
+
+    table.find('tr').each((_rowIdx, tr) => {
+      const row: string[] = [];
+      let col = 0;
+
+      const fillSpans = () => {
+        while (rowSpans[col]) {
+          const span = rowSpans[col]!;
+          row[col] = span.text;
+          span.remainingRows -= 1;
+          if (span.remainingRows <= 0) {
+            rowSpans[col] = null;
+          }
+          col += 1;
+        }
+      };
+
+      const cells = $(tr).find('th,td').toArray();
+      for (const cell of cells) {
+        fillSpans();
+
+        // Avoid pulling in nested table contents twice.
+        const $cell = $(cell);
+        const $clone = $cell.clone();
+        $clone.find('table').remove();
+
+        const text = normalizeCellText($clone.text());
+        const colspan = Math.max(1, Number.parseInt($cell.attr('colspan') || '1', 10) || 1);
+        const rowspan = Math.max(1, Number.parseInt($cell.attr('rowspan') || '1', 10) || 1);
+
+        for (let i = 0; i < colspan; i++) {
+          row[col + i] = text;
+          if (rowspan > 1) {
+            rowSpans[col + i] = { text, remainingRows: rowspan - 1 };
+          }
+        }
+
+        col += colspan;
       }
-      
-      if (cells.length > 0) {
-        rows.push(cells);
-      }
-    }
-    
-    return rows;
+
+      // Fill any trailing spans after the last explicit cell.
+      fillSpans();
+
+      // Skip fully empty rows.
+      if (row.every(c => !c || c.trim().length === 0)) return;
+      matrix.push(row);
+    });
+
+    const maxCols = matrix.reduce((m, r) => Math.max(m, r.length), 0);
+    if (maxCols <= 0) return [];
+
+    return matrix.map(r => (r.length === maxCols ? r : [...r, ...Array(maxCols - r.length).fill('')]));
   }
 
   private convertToCSV(data: string[][]): string {
